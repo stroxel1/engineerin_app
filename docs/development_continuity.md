@@ -36,7 +36,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 10. Hydraulics page bottom rendering error fixed (local pandas import shadowing `pd`)
 11. Quick tools expanded with blend, brix reconciliation, and tank inventory helpers.
 12. Hydraulics expanded further with parallel branch balancing and vessel/static-head screens.
-13. Parallel hydraulics now supports both entered-split checking and a self-balancing flow solver with branch throttling-loss estimates.
+13. Dashboard and roadmap are now intended to stay updated with active work and completed items shown struck through in-app.
 
 ## Recent git commits
 - `7af1d88` Fix hydraulics page bottom rendering error

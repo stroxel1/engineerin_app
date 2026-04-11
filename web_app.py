@@ -129,14 +129,25 @@ def _display_delta_t(value_c: float, unit: str) -> float:
 
 
 
+def _render_status_lines(items: list[tuple[str, str]]) -> None:
+    for status, text in items:
+        if status == "done":
+            st.markdown(f"- ~~{text}~~")
+        elif status == "active":
+            st.markdown(f"- **IN PROGRESS:** {text}")
+        else:
+            st.markdown(f"- {text}")
+
+
+
 def render_dashboard() -> None:
     st.title("Engineering App")
     st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, solution properties, and workbook inspection.")
     cols = st.columns(6)
     cards = [
-        ("Quick tools", "Conversions, flash steam, and dilution"),
+        ("Quick tools", "Conversions, flash steam, blending, tank inventory, and Brix reconciliation"),
         ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
-        ("Hydraulics", "Velocity, pressure drop, TDH, and residence time"),
+        ("Hydraulics", "Line sizing, TDH, branches, vessels, valves, pump power, and NPSHa"),
         ("Steam jets", "Curve comparison and operating-point screening"),
         ("Evaporators", "Duty, steam demand, and ΔT screen"),
         ("Crystallizers", "Yield, slurry rate, circulation ratio, and residence time"),
@@ -145,6 +156,27 @@ def render_dashboard() -> None:
         with col:
             st.metric(title, "Ready")
             st.caption(desc)
+
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Currently being advanced")
+        _render_status_lines([
+            ("active", "Hydraulics refinement: smarter parallel-branch balancing beyond fixed split entry"),
+            ("active", "Hydraulics refinement: better vessel/suction/discharge interaction with pump and NPSH screens"),
+            ("todo", "Evaporator design-calibrated mode from workbook logic"),
+            ("todo", "Steam-jet workbook-driven model-family import"),
+        ])
+    with right:
+        st.subheader("Recently completed")
+        _render_status_lines([
+            ("done", "Solution BPE for citric, fructose, dextrose, and sucrose"),
+            ("done", "Schedule 10S stainless hydraulics sizing from 1/2 in to 12 in"),
+            ("done", "Valve/fitting K-factor counting and TDH breakdown"),
+            ("done", "Pump power, NPSHa, and segmented system screens"),
+            ("done", "Control-valve sizing with cavitation/flashing screening"),
+            ("done", "Pump/system curve overlay"),
+            ("done", "Parallel branch and vessel/static-head screens"),
+        ])
 
 
 
@@ -1480,15 +1512,35 @@ def render_case_manager() -> None:
 
 def render_roadmap() -> None:
     st.header("Roadmap")
-    roadmap = [
-        {"priority": 1, "area": "Solution BPE", "next_step": "Refine >60 DS citric estimation with better literature and extend stronger product-specific fructose/dextrose correlations."},
-        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch-network splitting/merging, suction/discharge vessel modeling, and vendor-curve-ready anti-cavitation trim comparisons."},
-        {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
-        {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
-        {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
-        {"priority": 6, "area": "Quick tools", "next_step": "Add utility cost estimate tools and ratio-target blend solving on top of the new Brix reconciliation screen."},
-    ]
-    st.dataframe(pd.DataFrame(roadmap), use_container_width=True)
+    st.caption("Completed lines are struck through. Active items are marked in progress.")
+
+    st.subheader("Completed foundations")
+    _render_status_lines([
+        ("done", "Fresh engineering_app project scaffolded and placed under Documents/projects"),
+        ("done", "Streamlit browser shell established"),
+        ("done", "Per-input and per-output unit handling added across engineering pages"),
+        ("done", "Workbook upload and inspection workflow added"),
+        ("done", "Case manager added"),
+        ("done", "Solution BPE tools added for citric, fructose, dextrose, and sucrose"),
+        ("done", "Hydraulics core expanded with schedule 10S sizing, valves/fittings, TDH, pump power, NPSHa, segmented systems, control valves, pump/system curve, branch screens, and vessel head tools"),
+        ("done", "Quick tools expanded with blending, Brix reconciliation, and tank inventory"),
+    ])
+
+    st.subheader("Active work")
+    _render_status_lines([
+        ("active", "Hydraulics: improve branch-network balancing beyond fixed split assumptions"),
+        ("active", "Hydraulics: strengthen suction/discharge vessel interaction with pump and NPSH workflows"),
+    ])
+
+    st.subheader("Next queued additions")
+    _render_status_lines([
+        ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+        ("todo", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
+        ("todo", "Evaporators: add design-calibrated evaporator mode from workbook logic"),
+        ("todo", "Crystallizers: add stronger citric/fructose solubility and supersaturation screens"),
+        ("todo", "Quick tools: add utility cost estimate tools and ratio-target blend solving"),
+    ])
+
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")
 
 
