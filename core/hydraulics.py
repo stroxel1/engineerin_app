@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
+from engineering_app.core.pipe_data import get_common_fittings_map, get_schedule_10s_map
 from engineering_app.core.units import length_to_m, volumetric_flow_to_m3_h
 
 
@@ -30,7 +31,20 @@ class HydraulicResult:
     total_dynamic_head_m: float
     residence_time_s: float
     line_volume_m3: float
+    straight_loss_m: float
+    fitting_loss_m: float
     notes: list[str]
+
+
+@dataclass
+class HydraulicComparisonRow:
+    pipe_label: str
+    pipe_id_mm: float
+    velocity_m_s: float
+    pressure_drop_kpa: float
+    total_dynamic_head_m: float
+    residence_time_s: float
+    acceptable_velocity: bool
 
 
 def _friction_factor_swamee_jain(reynolds_number: float, roughness_m: float, diameter_m: float) -> float:
@@ -75,6 +89,8 @@ def calculate_hydraulics(inputs: HydraulicInputs) -> HydraulicResult:
         total_dynamic_head_m=tdh,
         residence_time_s=residence_time_s,
         line_volume_m3=line_volume_m3,
+        straight_loss_m=straight_loss_m,
+        fitting_loss_m=fitting_loss_m,
         notes=notes,
     )
 
@@ -105,3 +121,64 @@ def calculate_hydraulics_with_units(
             fitting_k_total=fitting_k_total,
         )
     )
+
+
+def fitting_k_from_counts(counts: dict[str, int | float]) -> tuple[float, list[str]]:
+    library = get_common_fittings_map()
+    total_k = 0.0
+    notes: list[str] = []
+    for key, count in counts.items():
+        if not count:
+            continue
+        spec = library.get(key)
+        if spec is None:
+            notes.append(f"Unknown fitting key ignored: {key}")
+            continue
+        total_k += spec.k_value * float(count)
+    return total_k, notes
+
+
+def get_schedule_10s_pipe_options() -> dict[str, float]:
+    return {label: spec.inside_diameter_in * 25.4 for label, spec in get_schedule_10s_map().items()}
+
+
+def compare_schedule_10s_sizes(
+    volumetric_flow_value: float,
+    volumetric_flow_unit: str,
+    density_kg_m3: float,
+    viscosity_cp: float,
+    pipe_length_value: float,
+    pipe_length_unit: str,
+    roughness_mm: float = 0.045,
+    elevation_change_value: float = 0.0,
+    elevation_change_unit: str = "m",
+    fitting_k_total: float = 0.0,
+) -> list[HydraulicComparisonRow]:
+    rows: list[HydraulicComparisonRow] = []
+    for label, pipe_id_mm in get_schedule_10s_pipe_options().items():
+        result = calculate_hydraulics_with_units(
+            volumetric_flow_value=volumetric_flow_value,
+            volumetric_flow_unit=volumetric_flow_unit,
+            density_kg_m3=density_kg_m3,
+            viscosity_cp=viscosity_cp,
+            pipe_id_value=pipe_id_mm,
+            pipe_id_unit="mm",
+            pipe_length_value=pipe_length_value,
+            pipe_length_unit=pipe_length_unit,
+            roughness_mm=roughness_mm,
+            elevation_change_value=elevation_change_value,
+            elevation_change_unit=elevation_change_unit,
+            fitting_k_total=fitting_k_total,
+        )
+        rows.append(
+            HydraulicComparisonRow(
+                pipe_label=label,
+                pipe_id_mm=pipe_id_mm,
+                velocity_m_s=result.velocity_m_s,
+                pressure_drop_kpa=result.pressure_drop_kpa,
+                total_dynamic_head_m=result.total_dynamic_head_m,
+                residence_time_s=result.residence_time_s,
+                acceptable_velocity=1.0 <= result.velocity_m_s <= 3.0,
+            )
+        )
+    return rows

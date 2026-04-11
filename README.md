@@ -7,7 +7,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - evaporator operating screens
 - crystallizer operating screens
 - workbook inspection and curve ingestion scaffolding
-- citric-acid BPE screening including >60 DS estimate mode
+- solution BPE screening for citric acid, fructose, dextrose, and sucrose
 - case save/load workflows
 
 ## Current stack
@@ -57,9 +57,10 @@ Default URL:
 ## Working browser sections
 - Dashboard
 - Roadmap
-- Citric BPE
-  - workbook-table interpolation through 60 wt% DS
-  - workbook-derived >60 DS screening estimate with warnings
+- Solution BPE
+  - citric workbook-table interpolation through 60 wt% DS
+  - workbook-derived >60 DS citric screening estimate with warnings
+  - fructose, dextrose, and sucrose BPE screening
   - BPE-driven capacity-impact screen
   - visible in-app priority list for next improvements
   - aligned with the hourly review loop
@@ -77,6 +78,9 @@ Default URL:
   - pressure drop
   - TDH
   - line volume and residence time
+  - schedule 10S stainless presets from 1/2 in to 12 in
+  - fitting and valve count-based K calculations
+  - size comparison across common stainless lines
 - Steam Jets
   - manual curve editor
   - operating-point screening vs curve

@@ -15,7 +15,12 @@ from engineering_app.core.citric_bpe import estimate_capacity_impact_from_bpe, e
 from engineering_app.core.crystallizers import CrystallizerInputs, estimate_crystallizer
 from engineering_app.core.curves import evaluate_operating_point, make_curve_from_xy_rows
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
-from engineering_app.core.hydraulics import calculate_hydraulics_with_units
+from engineering_app.core.hydraulics import (
+    calculate_hydraulics_with_units,
+    compare_schedule_10s_sizes,
+    fitting_k_from_counts,
+)
+from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
 from engineering_app.core.quicktools import (
     dilution_water,
     flash_fraction,
@@ -112,7 +117,7 @@ def render_dashboard() -> None:
     cols = st.columns(6)
     cards = [
         ("Quick tools", "Conversions, flash steam, and dilution"),
-        ("Citric BPE", "15-60 DS table plus >60 DS screening estimate"),
+        ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
         ("Hydraulics", "Velocity, pressure drop, TDH, and residence time"),
         ("Steam jets", "Curve comparison and operating-point screening"),
         ("Evaporators", "Duty, steam demand, and ΔT screen"),
@@ -237,52 +242,66 @@ def render_quick_tools() -> None:
 
 
 
-def render_citric_bpe() -> None:
-    st.header("Citric BPE")
-    tabs = st.tabs(["BPE estimate", "Capacity impact"]) 
+def render_solution_bpe() -> None:
+    st.header("Solution BPE")
+    tabs = st.tabs(["BPE estimate", "Capacity impact"])
+    bpe_products = ["citric_acid", "fructose", "dextrose", "sucrose"]
 
     with tabs[0]:
         c1, c2, c3, c4 = st.columns(4)
-        ds = c1.number_input("Citric DS (wt%)", min_value=0.0, max_value=90.0, value=62.0, key="citric_ds")
-        pressure_value = c2.number_input("Operating pressure", value=20.0, key="citric_pressure")
-        pressure_unit = c3.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="citric_pressure_unit")
-        method = c4.selectbox(
+        product = c1.selectbox("Product", bpe_products, format_func=lambda key: PRODUCT_PROFILES[key].display_name, key="bpe_product")
+        solids = c2.number_input("Solids / DS (wt%)", min_value=0.0, max_value=90.0, value=62.0, key="bpe_solids")
+        pressure_value = c3.number_input("Operating pressure", value=20.0, key="bpe_pressure")
+        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="bpe_pressure_unit")
+        c5, c6, c7 = st.columns(3)
+        method = c5.selectbox(
             "Method",
-            ["auto", "table", "high_solids"],
+            ["auto", "table", "high_solids"] if product == "citric_acid" else ["auto"],
             format_func=lambda key: {
-                "auto": "Auto (table to 60 DS, high-solids estimate above 60)",
+                "auto": "Auto",
                 "table": "Workbook table / interpolation",
                 "high_solids": "Workbook >60 DS estimate",
-            }[key],
-            key="citric_method",
+            }.get(key, key),
+            key="bpe_method",
         )
-        c5, c6 = st.columns(2)
-        bpe_unit = c5.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_bpe_out")
-        temp_unit = c6.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="citric_temp_out")
+        bpe_unit = c6.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="bpe_out_unit")
+        temp_unit = c7.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="bpe_temp_out")
 
-        result = estimate_citric_bpe(ds, pressure_value, pressure_unit, method=method)
+        if product == "citric_acid":
+            result_payload = asdict(estimate_citric_bpe(solids, pressure_value, pressure_unit, method=method))
+            notes = result_payload["notes"]
+            bpe_c = result_payload["bpe_c"]
+            sat_c = result_payload["saturation_temperature_c"]
+            boil_c = result_payload["boiling_temperature_c"]
+            method_label = result_payload["method"]
+        else:
+            solution = solution_properties(product, solids, 45.0, pressure_value, pressure_unit)
+            result_payload = asdict(solution)
+            notes = solution.notes
+            bpe_c = solution.estimated_bpe_c
+            sat_c = solution.saturation_temperature_c
+            boil_c = solution.boiling_temperature_c
+            method_label = "product_screening_estimate"
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("BPE", f"{_display_delta_t(result.bpe_c, bpe_unit):,.2f} °{bpe_unit}")
-        m2.metric("Saturation temp", f"{_display_temperature(result.saturation_temperature_c, temp_unit):,.2f} °{temp_unit}")
-        m3.metric("Boiling temp", f"{_display_temperature(result.boiling_temperature_c, temp_unit):,.2f} °{temp_unit}")
-        m4.metric("Method", result.method)
-        st.json(asdict(result))
-        _show_notes(result.notes)
-        _remember_case("citric-bpe", {"ds_wt_pct": ds, "pressure_value": pressure_value, "pressure_unit": pressure_unit, "method": method, "bpe_output_unit": bpe_unit, "temperature_output_unit": temp_unit}, asdict(result))
+        m1.metric("BPE", f"{_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+        m2.metric("Saturation temp", f"{_display_temperature(sat_c, temp_unit):,.2f} °{temp_unit}")
+        m3.metric("Boiling temp", f"{_display_temperature(boil_c, temp_unit):,.2f} °{temp_unit}")
+        m4.metric("Method", method_label)
+        st.json(result_payload)
+        _show_notes(notes)
 
     with tabs[1]:
         c1, c2, c3, c4 = st.columns(4)
-        steam_temp = c1.number_input("Steam temperature", value=180.0, key="citric_cap_steam_temp")
-        steam_temp_unit = c2.selectbox("Steam temperature unit", TEMPERATURE_UNITS, index=0, key="citric_cap_steam_temp_unit")
-        pressure_value = c3.number_input("Operating pressure", value=20.0, key="citric_cap_pressure")
-        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="citric_cap_pressure_unit")
+        steam_temp = c1.number_input("Steam temperature", value=180.0, key="bpe_cap_steam_temp")
+        steam_temp_unit = c2.selectbox("Steam temperature unit", TEMPERATURE_UNITS, index=0, key="bpe_cap_steam_temp_unit")
+        pressure_value = c3.number_input("Operating pressure", value=20.0, key="bpe_cap_pressure")
+        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="bpe_cap_pressure_unit")
         c5, c6, c7, c8 = st.columns(4)
-        current_bpe = c5.number_input("Current BPE", value=6.0, key="citric_cap_current_bpe")
-        new_bpe = c6.number_input("New BPE", value=10.0, key="citric_cap_new_bpe")
-        bpe_unit = c7.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_cap_bpe_unit")
-        dt_unit = c8.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_cap_dt_out")
-        temp_unit_out = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="citric_cap_temp_out")
-
+        current_bpe = c5.number_input("Current BPE", value=6.0, key="bpe_cap_current_bpe")
+        new_bpe = c6.number_input("New BPE", value=10.0, key="bpe_cap_new_bpe")
+        bpe_unit = c7.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="bpe_cap_bpe_unit")
+        dt_unit = c8.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="bpe_cap_dt_out")
+        temp_unit_out = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="bpe_cap_temp_out")
         steam_temp_c = steam_temp if steam_temp_unit == "C" else (steam_temp - 32.0) * 5.0 / 9.0
         current_bpe_c = current_bpe if bpe_unit == "C" else current_bpe * 5.0 / 9.0
         new_bpe_c = new_bpe if bpe_unit == "C" else new_bpe * 5.0 / 9.0
@@ -291,19 +310,14 @@ def render_citric_bpe() -> None:
         m1.metric("Current ΔT", f"{_display_delta_t(impact.current_delta_t_c, dt_unit):,.2f} °{dt_unit}")
         m2.metric("New ΔT", f"{_display_delta_t(impact.new_delta_t_c, dt_unit):,.2f} °{dt_unit}")
         m3.metric("Relative capacity change", f"{impact.relative_capacity_change_pct:,.1f} %")
-        st.json(
-            {
-                **asdict(impact),
-                "steam_temperature_display": f"{_display_temperature(impact.steam_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}",
-                "saturation_temperature_display": f"{_display_temperature(impact.saturation_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}",
-            }
-        )
+        st.json({**asdict(impact), "steam_temperature_display": f"{_display_temperature(impact.steam_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}", "saturation_temperature_display": f"{_display_temperature(impact.saturation_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}"})
         _show_notes(impact.notes)
 
 
 
 def render_hydraulics() -> None:
     st.header("Hydraulics")
+    st.caption("Sized for plant line studies with stainless schedule 10S presets, fitting counts, TDH, and size comparisons.")
     c1, c2, c3, c4 = st.columns(4)
     flow_value = c1.number_input("Flow", value=100.0, key="hyd_flow")
     flow_unit = c2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_flow_unit")
@@ -313,24 +327,45 @@ def render_hydraulics() -> None:
     c5, c6, c7, c8 = st.columns(4)
     viscosity = c5.number_input("Viscosity", value=1.0, key="hyd_viscosity")
     viscosity_unit = c6.selectbox("Viscosity unit", VISCOSITY_UNITS, index=0, key="hyd_viscosity_unit")
-    pipe_id = c7.number_input("Pipe ID", value=52.5, key="hyd_pipe_id")
-    pipe_id_unit = c8.selectbox("Pipe ID unit", LENGTH_UNITS, index=2, key="hyd_pipe_id_unit")
+    pipe_basis = c7.selectbox("Pipe basis", ["schedule_10s_stainless", "custom_id"], format_func=lambda key: {"schedule_10s_stainless": "Schedule 10S stainless preset", "custom_id": "Custom inside diameter"}[key], key="hyd_pipe_basis")
+    roughness_mm = c8.number_input("Roughness (mm)", value=0.045, key="hyd_roughness")
 
-    c9, c10, c11, c12 = st.columns(4)
-    pipe_length = c9.number_input("Pipe length", value=120.0, key="hyd_pipe_len")
-    pipe_length_unit = c10.selectbox("Pipe length unit", LENGTH_UNITS, index=0, key="hyd_pipe_len_unit")
-    roughness_mm = c11.number_input("Roughness (mm)", value=0.045, key="hyd_roughness")
-    fitting_k = c12.number_input("Total fitting K", value=8.0, key="hyd_fit_k")
+    if pipe_basis == "schedule_10s_stainless":
+        selected_pipe = st.selectbox("Pipe size", [spec.display_name for spec in SCHEDULE_10S_STAINLESS], index=5, key="hyd_pipe_preset")
+        pipe_lookup = {spec.display_name: spec for spec in SCHEDULE_10S_STAINLESS}
+        pipe_spec = pipe_lookup[selected_pipe]
+        pipe_id = pipe_spec.inside_diameter_in * 25.4
+        pipe_id_unit = "mm"
+        st.caption(f"Selected {selected_pipe} Sch {pipe_spec.schedule_label} stainless, ID = {pipe_id:.2f} mm")
+    else:
+        c9, c10 = st.columns(2)
+        pipe_id = c9.number_input("Pipe ID", value=52.5, key="hyd_pipe_id")
+        pipe_id_unit = c10.selectbox("Pipe ID unit", LENGTH_UNITS, index=2, key="hyd_pipe_id_unit")
 
-    c13, c14, c15, c16 = st.columns(4)
+    c11, c12, c13 = st.columns(3)
+    pipe_length = c11.number_input("Pipe length", value=120.0, key="hyd_pipe_len")
+    pipe_length_unit = c12.selectbox("Pipe length unit", LENGTH_UNITS, index=0, key="hyd_pipe_len_unit")
     elevation_change = c13.number_input("Elevation change", value=12.0, key="hyd_elev")
-    elevation_unit = c14.selectbox("Elevation unit", LENGTH_UNITS, index=0, key="hyd_elev_unit")
-    velocity_unit = c15.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
-    head_unit = c16.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
-    c17, c18, c19 = st.columns(3)
-    dp_unit = c17.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
-    residence_unit = c18.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
-    volume_unit = c19.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
+    elevation_unit = st.selectbox("Elevation unit", LENGTH_UNITS, index=0, key="hyd_elev_unit")
+
+    st.subheader("Fittings and valves")
+    fitting_cols = st.columns(5)
+    fitting_counts = {}
+    for idx, fitting in enumerate(COMMON_FITTINGS):
+        fitting_counts[fitting.key] = fitting_cols[idx % 5].number_input(fitting.display_name, min_value=0, value=0, step=1, key=f"fit_{fitting.key}")
+    additional_k = st.number_input("Additional user-entered K", value=0.0, key="hyd_additional_k")
+    fitting_k_total, fitting_notes = fitting_k_from_counts(fitting_counts)
+    fitting_k_total += additional_k
+    st.caption(f"Computed fitting K total: {fitting_k_total:.2f}")
+
+    c14, c15, c16, c17 = st.columns(4)
+    velocity_unit = c14.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
+    head_unit = c15.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
+    dp_unit = c16.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
+    residence_unit = c17.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
+    c18, c19 = st.columns(2)
+    volume_unit = c18.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
+    compare_sizes = c19.checkbox("Compare all 10S stainless sizes", value=True, key="hyd_compare_sizes")
 
     from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
     result = calculate_hydraulics_with_units(
@@ -345,16 +380,47 @@ def render_hydraulics() -> None:
         roughness_mm=roughness_mm,
         elevation_change_value=elevation_change,
         elevation_change_unit=elevation_unit,
-        fitting_k_total=fitting_k,
+        fitting_k_total=fitting_k_total,
     )
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Velocity", f"{m_s_to_velocity(result.velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
     m2.metric("Pressure drop", f"{_pressure_delta_from_kpa(result.pressure_drop_kpa, dp_unit):,.2f} {dp_unit}")
-    m3.metric("TDH", f"{m_to_length(result.total_dynamic_head_m, head_unit):,.2f} {head_unit}")
-    m4.metric("Residence time", f"{seconds_to_time(result.residence_time_s, residence_unit):,.2f} {residence_unit}")
-    m5.metric("Line volume", f"{m3_to_volume(result.line_volume_m3, volume_unit):,.3f} {volume_unit}")
+    m3.metric("Straight-pipe loss", f"{m_to_length(result.straight_loss_m, head_unit):,.2f} {head_unit}")
+    m4.metric("Fitting loss", f"{m_to_length(result.fitting_loss_m, head_unit):,.2f} {head_unit}")
+    m5.metric("TDH", f"{m_to_length(result.total_dynamic_head_m, head_unit):,.2f} {head_unit}")
+    c20, c21 = st.columns(2)
+    c20.metric("Residence time", f"{seconds_to_time(result.residence_time_s, residence_unit):,.2f} {residence_unit}")
+    c21.metric("Line volume", f"{m3_to_volume(result.line_volume_m3, volume_unit):,.3f} {volume_unit}")
+    _show_notes(result.notes + fitting_notes)
     st.json(asdict(result))
-    _show_notes(result.notes)
+
+    if compare_sizes:
+        rows = compare_schedule_10s_sizes(
+            volumetric_flow_value=flow_value,
+            volumetric_flow_unit=flow_unit,
+            density_kg_m3=density_to_kg_m3(density, density_unit),
+            viscosity_cp=viscosity_to_cp(viscosity, viscosity_unit),
+            pipe_length_value=pipe_length,
+            pipe_length_unit=pipe_length_unit,
+            roughness_mm=roughness_mm,
+            elevation_change_value=elevation_change,
+            elevation_change_unit=elevation_unit,
+            fitting_k_total=fitting_k_total,
+        )
+        df = pd.DataFrame([
+            {
+                "Pipe": row.pipe_label,
+                "ID (mm)": row.pipe_id_mm,
+                f"Velocity ({velocity_unit})": m_s_to_velocity(row.velocity_m_s, velocity_unit),
+                f"ΔP ({dp_unit})": _pressure_delta_from_kpa(row.pressure_drop_kpa, dp_unit),
+                f"TDH ({head_unit})": m_to_length(row.total_dynamic_head_m, head_unit),
+                f"Residence ({residence_unit})": seconds_to_time(row.residence_time_s, residence_unit),
+                "Preferred velocity band": "Yes" if row.acceptable_velocity else "No",
+            }
+            for row in rows
+        ])
+        st.subheader("Schedule 10S size comparison")
+        st.dataframe(df, use_container_width=True)
 
 
 
@@ -447,17 +513,13 @@ def render_evaporators() -> None:
     recirc = c10.number_input("Recirculation ratio", value=4.0, key="ev_recirc")
     evaporator_product = c11.selectbox(
         "Product / liquor",
-        ["manual", "citric_acid", "fructose", "dextrose", "sucrose"],
-        format_func=lambda key: "Manual BPE" if key == "manual" else PRODUCT_PROFILES[key].display_name,
+        ["citric_acid", "fructose", "dextrose", "sucrose"],
+        format_func=lambda key: PRODUCT_PROFILES[key].display_name,
         key="ev_product",
     )
     duty_per_kg = c12.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_spec_duty")
-    bpe_unit = st.selectbox("Manual / displayed BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_bpe_unit")
-    if evaporator_product == "manual":
-        bpe_value = st.number_input("BPE", value=6.0, key="ev_bpe_manual")
-        bpe_c = bpe_value if bpe_unit == "C" else bpe_value * 5.0 / 9.0
-        st.caption("Manual BPE basis selected.")
-    elif evaporator_product == "citric_acid":
+    bpe_unit = st.selectbox("Displayed BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_bpe_unit")
+    if evaporator_product == "citric_acid":
         citric = estimate_citric_bpe(product_solids, operating_pressure, operating_pressure_unit, method="auto")
         bpe_c = citric.bpe_c
         st.caption(f"Auto-estimated citric BPE at {product_solids:.1f} wt%: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
@@ -626,9 +688,9 @@ def render_case_manager() -> None:
 def render_roadmap() -> None:
     st.header("Roadmap")
     roadmap = [
-        {"priority": 1, "area": "Citric BPE", "next_step": "Refine >60 DS estimation with better literature or validated plant-derived benchmarks."},
-        {"priority": 2, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
-        {"priority": 3, "area": "Hydraulics", "next_step": "Add pump power, NPSH screen, and line sizing recommendations."},
+        {"priority": 1, "area": "Solution BPE", "next_step": "Refine >60 DS citric estimation with better literature and extend stronger product-specific fructose/dextrose correlations."},
+        {"priority": 2, "area": "Hydraulics", "next_step": "Add pump power, NPSH screen, branch networks, and suction/discharge system breakdowns."},
+        {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
         {"priority": 6, "area": "Quick tools", "next_step": "Add tank volume, blend/dilution, brix/solids, and utility cost estimate tools."},
@@ -641,7 +703,7 @@ PAGES = {
     "Dashboard": render_dashboard,
     "Roadmap": render_roadmap,
     "Quick Tools": render_quick_tools,
-    "Citric BPE": render_citric_bpe,
+    "Solution BPE": render_solution_bpe,
     "Hydraulics": render_hydraulics,
     "Steam Jets": render_steam_jets,
     "Steam & Utilities": render_steam,
