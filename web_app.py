@@ -40,7 +40,7 @@ from engineering_app.core.quicktools import (
     thermal_point,
 )
 from engineering_app.core.solutions import PRODUCT_PROFILES
-from engineering_app.core.steam import duty_from_steam_flow
+from engineering_app.core.steam import duty_from_steam_flow, evaluate_steam_header_pressure_change, thermo_compressor_balance
 from engineering_app.core.units import (
     DELTA_TEMPERATURE_UNITS,
     DENSITY_UNITS,
@@ -573,47 +573,155 @@ def render_hydraulics() -> None:
 
 def render_steam_jets() -> None:
     st.header("Steam Jets / Thermo-Compressors")
-    st.write("Enter a performance curve and compare one operating point against it. Units are selectable and apply to the editor and displayed results.")
-    c0, c00 = st.columns(2)
-    x_unit = c0.selectbox("X-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_x_unit")
-    y_unit = c00.selectbox("Y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_y_unit")
-    default_curve = pd.DataFrame(
-        [
-            {"suction_load": 2000.0, "motive_steam": 3200.0},
-            {"suction_load": 4000.0, "motive_steam": 5000.0},
-            {"suction_load": 6000.0, "motive_steam": 7100.0},
-            {"suction_load": 8000.0, "motive_steam": 9500.0},
-        ]
-    )
-    edited = st.data_editor(default_curve, num_rows="dynamic", use_container_width=True, key="sj_editor")
-    c1, c2, c3, c4 = st.columns(4)
-    curve_name = c1.text_input("Curve name", value="Thermo-compressor A", key="sj_curve_name")
-    x_col = c2.selectbox("X column", list(edited.columns), index=0, key="sj_xcol")
-    y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0, key="sj_ycol")
-    family = c4.text_input("Family / motive basis", value="Motive 3.5 barg", key="sj_family")
-    operating_x = st.number_input("Operating x-value", value=5000.0, key="sj_x")
-    actual_y = st.number_input("Actual y-value", value=6200.0, key="sj_y")
-    rows = edited.to_dict(orient="records")
-    curve = make_curve_from_xy_rows(curve_name, x_col, y_col, rows, family=family)
-    result = evaluate_operating_point(curve, operating_x, actual_y)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=edited[x_col], y=edited[y_col], mode="lines+markers", name="Curve"))
-    fig.add_trace(go.Scatter(x=[operating_x], y=[result.predicted_y], mode="markers", marker=dict(size=12), name="Predicted point"))
-    fig.add_trace(go.Scatter(x=[operating_x], y=[actual_y], mode="markers", marker=dict(size=12, symbol="diamond"), name="Actual point"))
-    fig.update_layout(xaxis_title=f"{x_col} ({x_unit})", yaxis_title=f"{y_col} ({y_unit})", title="Steam-Jet Operating Point vs Curve")
-    st.plotly_chart(fig, use_container_width=True)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Predicted y", f"{result.predicted_y:,.1f} {y_unit}")
-    m2.metric("Actual y", f"{result.actual_y:,.1f} {y_unit}")
-    m3.metric("% of curve", f"{result.percent_of_curve:,.1f}%")
-    m4.metric("Deviation", f"{result.deviation_pct:,.1f}%")
-    _show_notes(result.notes)
+    tabs = st.tabs(["Curve check", "Thermo-compressor balance"])
+
+    with tabs[0]:
+        st.write("Enter a performance curve and compare one operating point against it. Units are selectable and apply to the editor and displayed results.")
+        c0, c00 = st.columns(2)
+        x_unit = c0.selectbox("X-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_x_unit")
+        y_unit = c00.selectbox("Y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_y_unit")
+        default_curve = pd.DataFrame(
+            [
+                {"suction_load": 2000.0, "motive_steam": 3200.0},
+                {"suction_load": 4000.0, "motive_steam": 5000.0},
+                {"suction_load": 6000.0, "motive_steam": 7100.0},
+                {"suction_load": 8000.0, "motive_steam": 9500.0},
+            ]
+        )
+        edited = st.data_editor(default_curve, num_rows="dynamic", use_container_width=True, key="sj_editor")
+        c1, c2, c3, c4 = st.columns(4)
+        curve_name = c1.text_input("Curve name", value="Thermo-compressor A", key="sj_curve_name")
+        x_col = c2.selectbox("X column", list(edited.columns), index=0, key="sj_xcol")
+        y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0, key="sj_ycol")
+        family = c4.text_input("Family / motive basis", value="Motive 3.5 barg", key="sj_family")
+        operating_x = st.number_input("Operating x-value", value=5000.0, key="sj_x")
+        actual_y = st.number_input("Actual y-value", value=6200.0, key="sj_y")
+        rows = edited.to_dict(orient="records")
+        curve = make_curve_from_xy_rows(curve_name, x_col, y_col, rows, family=family)
+        result = evaluate_operating_point(curve, operating_x, actual_y)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=edited[x_col], y=edited[y_col], mode="lines+markers", name="Curve"))
+        fig.add_trace(go.Scatter(x=[operating_x], y=[result.predicted_y], mode="markers", marker=dict(size=12), name="Predicted point"))
+        fig.add_trace(go.Scatter(x=[operating_x], y=[actual_y], mode="markers", marker=dict(size=12, symbol="diamond"), name="Actual point"))
+        fig.update_layout(xaxis_title=f"{x_col} ({x_unit})", yaxis_title=f"{y_col} ({y_unit})", title="Steam-Jet Operating Point vs Curve")
+        st.plotly_chart(fig, use_container_width=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Predicted y", f"{result.predicted_y:,.1f} {y_unit}")
+        m2.metric("Actual y", f"{result.actual_y:,.1f} {y_unit}")
+        m3.metric("% of curve", f"{result.percent_of_curve:,.1f}%")
+        m4.metric("Deviation", f"{result.deviation_pct:,.1f}%")
+        _show_notes(result.notes)
+        _remember_case(
+            "steam-jets-curve-check",
+            {
+                "curve_name": curve_name,
+                "x_column": x_col,
+                "y_column": y_col,
+                "family": family,
+                "x_unit": x_unit,
+                "y_unit": y_unit,
+                "operating_x": operating_x,
+                "actual_y": actual_y,
+                "rows": rows,
+            },
+            asdict(result),
+        )
+
+    with tabs[1]:
+        st.write("Screen a thermo-compressor from suction vapor load and pressure lift using a simple adiabatic steam-mixing balance. Use vendor curves before equipment selection.")
+        b1, b2, b3, b4 = st.columns(4)
+        suction_flow_value = b1.number_input("Suction vapor flow", min_value=0.1, value=5000.0, key="sj_balance_suction_flow")
+        suction_flow_unit = b2.selectbox("Suction flow unit", MASS_FLOW_UNITS, index=0, key="sj_balance_suction_flow_unit")
+        suction_pressure_value = b3.number_input("Suction pressure", value=150.0, key="sj_balance_suction_pressure")
+        suction_pressure_unit = b4.selectbox("Suction pressure unit", PRESSURE_UNITS, index=0, key="sj_balance_suction_pressure_unit")
+        b5, b6, b7, b8 = st.columns(4)
+        motive_pressure_value = b5.number_input("Motive steam pressure", value=3.5, key="sj_balance_motive_pressure")
+        motive_pressure_unit = b6.selectbox("Motive steam pressure unit", PRESSURE_UNITS, index=4, key="sj_balance_motive_pressure_unit")
+        discharge_pressure_value = b7.number_input("Discharge pressure", value=1.2, key="sj_balance_discharge_pressure")
+        discharge_pressure_unit = b8.selectbox("Discharge pressure unit", PRESSURE_UNITS, index=4, key="sj_balance_discharge_pressure_unit")
+        b9, b10, b11, b12 = st.columns(4)
+        suction_superheat = b9.number_input("Suction superheat", min_value=0.0, value=0.0, key="sj_balance_suction_superheat")
+        suction_superheat_unit = b10.selectbox("Suction superheat unit", DELTA_TEMPERATURE_UNITS, index=0, key="sj_balance_suction_superheat_unit")
+        motive_superheat = b11.number_input("Motive superheat", min_value=0.0, value=0.0, key="sj_balance_motive_superheat")
+        motive_superheat_unit = b12.selectbox("Motive superheat unit", DELTA_TEMPERATURE_UNITS, index=0, key="sj_balance_motive_superheat_unit")
+        c13, c14, c15 = st.columns(3)
+        flow_output_unit = c13.selectbox("Flow output unit", MASS_FLOW_UNITS, index=0, key="sj_balance_flow_out_unit")
+        pressure_output_unit = c14.selectbox("Pressure output unit", PRESSURE_UNITS, index=4, key="sj_balance_pressure_out_unit")
+        temp_output_unit = c15.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="sj_balance_temp_out_unit")
+
+        suction_superheat_c = suction_superheat if suction_superheat_unit == "C" else suction_superheat * 5.0 / 9.0
+        motive_superheat_c = motive_superheat if motive_superheat_unit == "C" else motive_superheat * 5.0 / 9.0
+        try:
+            balance = thermo_compressor_balance(
+                suction_flow_value=suction_flow_value,
+                suction_flow_unit=suction_flow_unit,
+                suction_pressure_value=suction_pressure_value,
+                suction_pressure_unit=suction_pressure_unit,
+                motive_pressure_value=motive_pressure_value,
+                motive_pressure_unit=motive_pressure_unit,
+                discharge_pressure_value=discharge_pressure_value,
+                discharge_pressure_unit=discharge_pressure_unit,
+                suction_superheat_c=suction_superheat_c,
+                motive_superheat_c=motive_superheat_c,
+            )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Required motive steam", f"{kg_h_to_mass_flow(balance.motive_flow_kg_h, flow_output_unit):,.1f} {flow_output_unit}")
+            m2.metric("Discharge flow", f"{kg_h_to_mass_flow(balance.discharge_flow_kg_h, flow_output_unit):,.1f} {flow_output_unit}")
+            m3.metric("Entrainment ratio", f"{balance.entrainment_ratio:,.2f}")
+            m4.metric("Compression ratio", f"{balance.compression_ratio:,.2f}")
+            n1, n2, n3 = st.columns(3)
+            n1.metric("Motive/suction ratio", f"{balance.motive_to_suction_ratio:,.2f}")
+            n2.metric("Motive expansion ratio", f"{balance.motive_expansion_ratio:,.2f}")
+            n3.metric("Discharge saturation temp", f"{_display_temperature(balance.discharge_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}")
+            st.json(
+                {
+                    "suction_flow": f"{kg_h_to_mass_flow(balance.suction_flow_kg_h, flow_output_unit):,.2f} {flow_output_unit}",
+                    "required_motive_steam": f"{kg_h_to_mass_flow(balance.motive_flow_kg_h, flow_output_unit):,.2f} {flow_output_unit}",
+                    "discharge_flow": f"{kg_h_to_mass_flow(balance.discharge_flow_kg_h, flow_output_unit):,.2f} {flow_output_unit}",
+                    "suction_pressure": f"{kpa_abs_to_pressure(balance.suction_pressure_kpa_abs, pressure_output_unit):,.3f} {pressure_output_unit}",
+                    "motive_pressure": f"{kpa_abs_to_pressure(balance.motive_pressure_kpa_abs, pressure_output_unit):,.3f} {pressure_output_unit}",
+                    "discharge_pressure": f"{kpa_abs_to_pressure(balance.discharge_pressure_kpa_abs, pressure_output_unit):,.3f} {pressure_output_unit}",
+                    "suction_vapor_temperature": f"{_display_temperature(balance.suction_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}",
+                    "motive_vapor_temperature": f"{_display_temperature(balance.motive_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}",
+                    "discharge_temperature": f"{_display_temperature(balance.discharge_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}",
+                    "suction_vapor_enthalpy_kj_kg": round(balance.suction_vapor_enthalpy_kj_kg, 2),
+                    "motive_vapor_enthalpy_kj_kg": round(balance.motive_vapor_enthalpy_kj_kg, 2),
+                    "discharge_vapor_enthalpy_kj_kg": round(balance.discharge_vapor_enthalpy_kj_kg, 2),
+                    "entrainment_ratio": round(balance.entrainment_ratio, 4),
+                    "compression_ratio": round(balance.compression_ratio, 4),
+                    "motive_expansion_ratio": round(balance.motive_expansion_ratio, 4),
+                }
+            )
+            _show_notes(balance.notes)
+            _remember_case(
+                "steam-jets-thermo-compressor-balance",
+                {
+                    "suction_flow_value": suction_flow_value,
+                    "suction_flow_unit": suction_flow_unit,
+                    "suction_pressure_value": suction_pressure_value,
+                    "suction_pressure_unit": suction_pressure_unit,
+                    "motive_pressure_value": motive_pressure_value,
+                    "motive_pressure_unit": motive_pressure_unit,
+                    "discharge_pressure_value": discharge_pressure_value,
+                    "discharge_pressure_unit": discharge_pressure_unit,
+                    "suction_superheat": suction_superheat,
+                    "suction_superheat_unit": suction_superheat_unit,
+                    "motive_superheat": motive_superheat,
+                    "motive_superheat_unit": motive_superheat_unit,
+                },
+                asdict(balance),
+            )
+        except ValueError as exc:
+            st.error(str(exc))
 
 
 
 def render_steam() -> None:
     st.header("Steam & Utilities")
-    tab1, tab2 = st.tabs(["Steam for duty", "Duty from steam"])
+    st.caption("Quick utility screens for steam demand, duty back-calculation, and steam-header pressure-change impacts on capacity.")
+    tab1, tab2, tab3 = st.tabs(["Steam for duty", "Duty from steam", "Header pressure change"])
+
+    from engineering_app.core.units import delta_temperature_to_c, power_to_kw
 
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
@@ -622,12 +730,17 @@ def render_steam() -> None:
         pressure_value = c3.number_input("Steam pressure", value=3.5, key="steam_pressure_value")
         pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_pressure_unit")
         steam_flow_out_unit = st.selectbox("Steam-flow output unit", MASS_FLOW_UNITS, index=0, key="steam_flow_out_unit")
-        from engineering_app.core.units import power_to_kw
+        temp_out_unit = st.selectbox("Condensing-temperature output unit", TEMPERATURE_UNITS, index=0, key="steam_temp_out_unit")
         result = steam_for_duty(power_to_kw(duty_value, duty_unit), pressure_value, pressure_unit)
         m1, m2, m3 = st.columns(3)
         m1.metric("Steam required", f"{kg_h_to_mass_flow(result.steam_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
         m2.metric("Condensate", f"{kg_h_to_mass_flow(result.condensate_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
-        m3.metric("Condensing temperature", f"{result.condensing_temperature_c:,.2f} °C")
+        m3.metric("Condensing temperature", f"{_display_temperature(result.condensing_temperature_c, temp_out_unit):,.2f} °{temp_out_unit}")
+        _remember_case(
+            "steam-for-duty",
+            {"duty_value": duty_value, "duty_unit": duty_unit, "pressure_value": pressure_value, "pressure_unit": pressure_unit},
+            {"steam_flow_kg_h": result.steam_flow_kg_h, "condensate_flow_kg_h": result.condensate_flow_kg_h, "condensing_temperature_c": result.condensing_temperature_c},
+        )
         _show_notes(result.notes)
 
     with tab2:
@@ -637,8 +750,107 @@ def render_steam() -> None:
         pressure_value = c3.number_input("Steam pressure", value=3.5, key="steam_pressure_value_2")
         pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_pressure_unit_2")
         duty_out_unit = c5.selectbox("Duty output unit", POWER_UNITS, index=0, key="steam_duty_out_unit")
+        temp_out_unit = st.selectbox("Condensing-temperature output unit", TEMPERATURE_UNITS, index=0, key="steam_duty_temp_out")
         result = duty_from_steam_flow(steam_flow, steam_flow_unit, pressure_value, pressure_unit)
-        st.metric("Available duty", f"{kw_to_power(result.duty_kw, duty_out_unit):,.1f} {duty_out_unit}")
+        m1, m2 = st.columns(2)
+        m1.metric("Available duty", f"{kw_to_power(result.duty_kw, duty_out_unit):,.1f} {duty_out_unit}")
+        m2.metric("Condensing temperature", f"{_display_temperature(result.condensing_temperature_c, temp_out_unit):,.2f} °{temp_out_unit}")
+        _remember_case(
+            "duty-from-steam",
+            {"steam_flow": steam_flow, "steam_flow_unit": steam_flow_unit, "pressure_value": pressure_value, "pressure_unit": pressure_unit},
+            {"duty_kw": result.duty_kw, "condensing_temperature_c": result.condensing_temperature_c, "latent_heat_kj_kg": result.latent_heat_kj_kg},
+        )
+        _show_notes(result.notes)
+
+    with tab3:
+        st.subheader("Steam header pressure-change screen")
+        st.caption("Compare current vs reduced header pressure for the same duty, and optionally evaluate lost condensing ΔT against a process boiling condition.")
+        c1, c2, c3, c4 = st.columns(4)
+        duty_value = c1.number_input("Target duty", min_value=0.1, value=2500.0, key="steam_hdr_duty")
+        duty_unit = c2.selectbox("Duty unit", POWER_UNITS, index=0, key="steam_hdr_duty_unit")
+        current_pressure_value = c3.number_input("Current header pressure", value=4.5, key="steam_hdr_current_pressure")
+        current_pressure_unit = c4.selectbox("Current pressure unit", PRESSURE_UNITS, index=4, key="steam_hdr_current_pressure_unit")
+        c5, c6 = st.columns(2)
+        reduced_pressure_value = c5.number_input("Reduced / upset header pressure", value=3.0, key="steam_hdr_reduced_pressure")
+        reduced_pressure_unit = c6.selectbox("Reduced pressure unit", PRESSURE_UNITS, index=4, key="steam_hdr_reduced_pressure_unit")
+
+        st.markdown("**Optional process-side boiling context**")
+        p1, p2, p3, p4 = st.columns(4)
+        include_process_context = p1.checkbox("Include process boiling check", value=True, key="steam_hdr_include_process")
+        process_pressure_value = p2.number_input("Process pressure", value=20.0, key="steam_hdr_process_pressure", disabled=not include_process_context)
+        process_pressure_unit = p3.selectbox("Process pressure unit", PRESSURE_UNITS, index=0, key="steam_hdr_process_pressure_unit", disabled=not include_process_context)
+        bpe_value = p4.number_input("Process BPE", value=6.0, key="steam_hdr_bpe", disabled=not include_process_context)
+        bpe_unit = st.selectbox("Process BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="steam_hdr_bpe_unit", disabled=not include_process_context)
+
+        out1, out2, out3, out4 = st.columns(4)
+        steam_flow_out_unit = out1.selectbox("Steam-flow output unit", MASS_FLOW_UNITS, index=0, key="steam_hdr_flow_out")
+        duty_out_unit = out2.selectbox("Duty output unit", POWER_UNITS, index=0, key="steam_hdr_duty_out")
+        temp_out_unit = out3.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="steam_hdr_temp_out")
+        dt_out_unit = out4.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="steam_hdr_dt_out")
+
+        result = evaluate_steam_header_pressure_change(
+            duty_kw=power_to_kw(duty_value, duty_unit),
+            current_pressure_value=current_pressure_value,
+            current_pressure_unit=current_pressure_unit,
+            reduced_pressure_value=reduced_pressure_value,
+            reduced_pressure_unit=reduced_pressure_unit,
+            process_pressure_value=process_pressure_value if include_process_context else None,
+            process_pressure_unit=process_pressure_unit,
+            process_bpe_c=delta_temperature_to_c(bpe_value, bpe_unit),
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Current steam required", f"{kg_h_to_mass_flow(result.current_steam_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
+        m2.metric("Reduced-pressure steam required", f"{kg_h_to_mass_flow(result.reduced_steam_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
+        m3.metric("Extra steam required", f"{kg_h_to_mass_flow(result.additional_steam_required_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}", delta=f"{result.additional_steam_required_pct:,.1f}%")
+        m4.metric("Duty shortfall at same steam flow", f"{kw_to_power(result.duty_shortfall_kw, duty_out_unit):,.1f} {duty_out_unit}", delta=f"{result.duty_shortfall_pct:,.1f}% shortfall")
+
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Current condensing temp", f"{_display_temperature(result.current_condensing_temperature_c, temp_out_unit):,.2f} °{temp_out_unit}")
+        t2.metric("Reduced condensing temp", f"{_display_temperature(result.reduced_condensing_temperature_c, temp_out_unit):,.2f} °{temp_out_unit}")
+        t3.metric("Same-flow available duty", f"{kw_to_power(result.reduced_available_duty_kw, duty_out_unit):,.1f} {duty_out_unit}")
+
+        if result.process_boiling_temperature_c is not None:
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Process boiling temp", f"{_display_temperature(result.process_boiling_temperature_c, temp_out_unit):,.2f} °{temp_out_unit}")
+            d2.metric("Current available ΔT", f"{_display_delta_t(result.current_available_delta_t_c or 0.0, dt_out_unit):,.2f} °{dt_out_unit}")
+            d3.metric("Reduced available ΔT", f"{_display_delta_t(result.reduced_available_delta_t_c or 0.0, dt_out_unit):,.2f} °{dt_out_unit}")
+            d4.metric("ΔT change", f"{_display_delta_t(result.delta_t_change_c or 0.0, dt_out_unit):,.2f} °{dt_out_unit}")
+
+        comparison_df = pd.DataFrame(
+            [
+                {"case": "Current header", "steam_required": kg_h_to_mass_flow(result.current_steam_flow_kg_h, steam_flow_out_unit), "available_duty": kw_to_power(result.current_available_duty_kw, duty_out_unit)},
+                {"case": "Reduced header", "steam_required": kg_h_to_mass_flow(result.reduced_steam_flow_kg_h, steam_flow_out_unit), "available_duty": kw_to_power(result.reduced_available_duty_kw, duty_out_unit)},
+            ]
+        )
+        st.plotly_chart(
+            px.bar(
+                comparison_df,
+                x="case",
+                y=["steam_required", "available_duty"],
+                barmode="group",
+                title=f"Header pressure comparison ({steam_flow_out_unit} and {duty_out_unit})",
+            ),
+            use_container_width=True,
+        )
+        _remember_case(
+            "steam-header-pressure-change",
+            {
+                "duty_value": duty_value,
+                "duty_unit": duty_unit,
+                "current_pressure_value": current_pressure_value,
+                "current_pressure_unit": current_pressure_unit,
+                "reduced_pressure_value": reduced_pressure_value,
+                "reduced_pressure_unit": reduced_pressure_unit,
+                "include_process_context": include_process_context,
+                "process_pressure_value": process_pressure_value if include_process_context else None,
+                "process_pressure_unit": process_pressure_unit if include_process_context else None,
+                "bpe_value": bpe_value if include_process_context else None,
+                "bpe_unit": bpe_unit if include_process_context else None,
+            },
+            asdict(result),
+        )
+        st.json(asdict(result))
         _show_notes(result.notes)
 
 

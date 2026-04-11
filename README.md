@@ -92,9 +92,11 @@ Default URL:
   - operating-point screening vs curve
   - curve interpolation
   - % of curve and deviation view
+  - thermo-compressor balance screen for suction load, motive steam demand, entrainment ratio, compression ratio, and discharge saturation temperature
 - Steam & Utilities
   - steam required for duty
   - duty from steam flow
+  - steam header pressure-change screening for same-duty steam demand, same-flow duty loss, and optional process-side ΔT checks
   - improved steam saturation / condensing temperature screening via piecewise Antoine water correlation
 - Evaporators
   - feed/product/evaporation rate
