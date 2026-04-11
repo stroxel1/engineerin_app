@@ -81,6 +81,9 @@ Default URL:
   - schedule 10S stainless presets from 1/2 in to 12 in
   - fitting and valve count-based K calculations
   - size comparison across common stainless lines
+  - pump hydraulic/brake power
+  - NPSHa screening
+  - segmented suction/discharge system breakdowns
 - Steam Jets
   - manual curve editor
   - operating-point screening vs curve

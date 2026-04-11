@@ -16,9 +16,14 @@ from engineering_app.core.crystallizers import CrystallizerInputs, estimate_crys
 from engineering_app.core.curves import evaluate_operating_point, make_curve_from_xy_rows
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
 from engineering_app.core.hydraulics import (
+    PipeSegment,
     calculate_hydraulics_with_units,
+    calculate_pump_power,
+    calculate_segmented_system,
     compare_schedule_10s_sizes,
+    estimate_npsha,
     fitting_k_from_counts,
+    recommend_schedule_10s_size,
 )
 from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
 from engineering_app.core.quicktools import (
@@ -317,18 +322,21 @@ def render_solution_bpe() -> None:
 
 def render_hydraulics() -> None:
     st.header("Hydraulics")
-    st.caption("Sized for plant line studies with stainless schedule 10S presets, fitting counts, TDH, and size comparisons.")
-    c1, c2, c3, c4 = st.columns(4)
-    flow_value = c1.number_input("Flow", value=100.0, key="hyd_flow")
-    flow_unit = c2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_flow_unit")
-    density = c3.number_input("Density", value=998.0, key="hyd_density")
-    density_unit = c4.selectbox("Density unit", DENSITY_UNITS, index=0, key="hyd_density_unit")
+    st.caption("Sized for plant line studies with stainless schedule 10S presets, fittings, TDH, pump power, NPSHa, and segment breakdowns.")
+    tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system"])
 
-    c5, c6, c7, c8 = st.columns(4)
-    viscosity = c5.number_input("Viscosity", value=1.0, key="hyd_viscosity")
-    viscosity_unit = c6.selectbox("Viscosity unit", VISCOSITY_UNITS, index=0, key="hyd_viscosity_unit")
-    pipe_basis = c7.selectbox("Pipe basis", ["schedule_10s_stainless", "custom_id"], format_func=lambda key: {"schedule_10s_stainless": "Schedule 10S stainless preset", "custom_id": "Custom inside diameter"}[key], key="hyd_pipe_basis")
-    roughness_mm = c8.number_input("Roughness (mm)", value=0.045, key="hyd_roughness")
+    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp, power_to_kw
+
+    base1, base2, base3, base4 = st.columns(4)
+    flow_value = base1.number_input("Flow", value=100.0, key="hyd_flow")
+    flow_unit = base2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_flow_unit")
+    density = base3.number_input("Density", value=998.0, key="hyd_density")
+    density_unit = base4.selectbox("Density unit", DENSITY_UNITS, index=0, key="hyd_density_unit")
+    base5, base6, base7, base8 = st.columns(4)
+    viscosity = base5.number_input("Viscosity", value=1.0, key="hyd_viscosity")
+    viscosity_unit = base6.selectbox("Viscosity unit", VISCOSITY_UNITS, index=0, key="hyd_viscosity_unit")
+    pipe_basis = base7.selectbox("Pipe basis", ["schedule_10s_stainless", "custom_id"], format_func=lambda key: {"schedule_10s_stainless": "Schedule 10S stainless preset", "custom_id": "Custom inside diameter"}[key], key="hyd_pipe_basis")
+    roughness_mm = base8.number_input("Roughness (mm)", value=0.045, key="hyd_roughness")
 
     if pipe_basis == "schedule_10s_stainless":
         selected_pipe = st.selectbox("Pipe size", [spec.display_name for spec in SCHEDULE_10S_STAINLESS], index=5, key="hyd_pipe_preset")
@@ -338,14 +346,14 @@ def render_hydraulics() -> None:
         pipe_id_unit = "mm"
         st.caption(f"Selected {selected_pipe} Sch {pipe_spec.schedule_label} stainless, ID = {pipe_id:.2f} mm")
     else:
-        c9, c10 = st.columns(2)
-        pipe_id = c9.number_input("Pipe ID", value=52.5, key="hyd_pipe_id")
-        pipe_id_unit = c10.selectbox("Pipe ID unit", LENGTH_UNITS, index=2, key="hyd_pipe_id_unit")
+        custom1, custom2 = st.columns(2)
+        pipe_id = custom1.number_input("Pipe ID", value=52.5, key="hyd_pipe_id")
+        pipe_id_unit = custom2.selectbox("Pipe ID unit", LENGTH_UNITS, index=2, key="hyd_pipe_id_unit")
 
-    c11, c12, c13 = st.columns(3)
-    pipe_length = c11.number_input("Pipe length", value=120.0, key="hyd_pipe_len")
-    pipe_length_unit = c12.selectbox("Pipe length unit", LENGTH_UNITS, index=0, key="hyd_pipe_len_unit")
-    elevation_change = c13.number_input("Elevation change", value=12.0, key="hyd_elev")
+    geom1, geom2, geom3 = st.columns(3)
+    pipe_length = geom1.number_input("Pipe length", value=120.0, key="hyd_pipe_len")
+    pipe_length_unit = geom2.selectbox("Pipe length unit", LENGTH_UNITS, index=0, key="hyd_pipe_len_unit")
+    elevation_change = geom3.number_input("Elevation change", value=12.0, key="hyd_elev")
     elevation_unit = st.selectbox("Elevation unit", LENGTH_UNITS, index=0, key="hyd_elev_unit")
 
     st.subheader("Fittings and valves")
@@ -358,21 +366,13 @@ def render_hydraulics() -> None:
     fitting_k_total += additional_k
     st.caption(f"Computed fitting K total: {fitting_k_total:.2f}")
 
-    c14, c15, c16, c17 = st.columns(4)
-    velocity_unit = c14.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
-    head_unit = c15.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
-    dp_unit = c16.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
-    residence_unit = c17.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
-    c18, c19 = st.columns(2)
-    volume_unit = c18.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
-    compare_sizes = c19.checkbox("Compare all 10S stainless sizes", value=True, key="hyd_compare_sizes")
-
-    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
+    density_kg_m3 = density_to_kg_m3(density, density_unit)
+    viscosity_cp = viscosity_to_cp(viscosity, viscosity_unit)
     result = calculate_hydraulics_with_units(
         volumetric_flow_value=flow_value,
         volumetric_flow_unit=flow_unit,
-        density_kg_m3=density_to_kg_m3(density, density_unit),
-        viscosity_cp=viscosity_to_cp(viscosity, viscosity_unit),
+        density_kg_m3=density_kg_m3,
+        viscosity_cp=viscosity_cp,
         pipe_id_value=pipe_id,
         pipe_id_unit=pipe_id_unit,
         pipe_length_value=pipe_length,
@@ -382,24 +382,36 @@ def render_hydraulics() -> None:
         elevation_change_unit=elevation_unit,
         fitting_k_total=fitting_k_total,
     )
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Velocity", f"{m_s_to_velocity(result.velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
-    m2.metric("Pressure drop", f"{_pressure_delta_from_kpa(result.pressure_drop_kpa, dp_unit):,.2f} {dp_unit}")
-    m3.metric("Straight-pipe loss", f"{m_to_length(result.straight_loss_m, head_unit):,.2f} {head_unit}")
-    m4.metric("Fitting loss", f"{m_to_length(result.fitting_loss_m, head_unit):,.2f} {head_unit}")
-    m5.metric("TDH", f"{m_to_length(result.total_dynamic_head_m, head_unit):,.2f} {head_unit}")
-    c20, c21 = st.columns(2)
-    c20.metric("Residence time", f"{seconds_to_time(result.residence_time_s, residence_unit):,.2f} {residence_unit}")
-    c21.metric("Line volume", f"{m3_to_volume(result.line_volume_m3, volume_unit):,.3f} {volume_unit}")
-    _show_notes(result.notes + fitting_notes)
-    st.json(asdict(result))
 
-    if compare_sizes:
+    with tabs[0]:
+        c1, c2, c3, c4 = st.columns(4)
+        velocity_unit = c1.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
+        head_unit = c2.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
+        dp_unit = c3.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
+        residence_unit = c4.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
+        volume_unit = st.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Velocity", f"{m_s_to_velocity(result.velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
+        m2.metric("Pressure drop", f"{_pressure_delta_from_kpa(result.pressure_drop_kpa, dp_unit):,.2f} {dp_unit}")
+        m3.metric("Straight-pipe loss", f"{m_to_length(result.straight_loss_m, head_unit):,.2f} {head_unit}")
+        m4.metric("Fitting loss", f"{m_to_length(result.fitting_loss_m, head_unit):,.2f} {head_unit}")
+        m5.metric("TDH", f"{m_to_length(result.total_dynamic_head_m, head_unit):,.2f} {head_unit}")
+        c5, c6 = st.columns(2)
+        c5.metric("Residence time", f"{seconds_to_time(result.residence_time_s, residence_unit):,.2f} {residence_unit}")
+        c6.metric("Line volume", f"{m3_to_volume(result.line_volume_m3, volume_unit):,.3f} {volume_unit}")
+        _show_notes(result.notes + fitting_notes)
+        st.json(asdict(result))
+
+    with tabs[1]:
+        velocity_unit = st.selectbox("Comparison velocity unit", VELOCITY_UNITS, index=0, key="hyd_cmp_vel_out")
+        head_unit = st.selectbox("Comparison head unit", LENGTH_UNITS, index=0, key="hyd_cmp_head_out")
+        dp_unit = st.selectbox("Comparison ΔP unit", ("kPa", "psi", "bar"), index=0, key="hyd_cmp_dp_out")
+        residence_unit = st.selectbox("Comparison residence unit", TIME_UNITS, index=0, key="hyd_cmp_time_out")
         rows = compare_schedule_10s_sizes(
             volumetric_flow_value=flow_value,
             volumetric_flow_unit=flow_unit,
-            density_kg_m3=density_to_kg_m3(density, density_unit),
-            viscosity_cp=viscosity_to_cp(viscosity, viscosity_unit),
+            density_kg_m3=density_kg_m3,
+            viscosity_cp=viscosity_cp,
             pipe_length_value=pipe_length,
             pipe_length_unit=pipe_length_unit,
             roughness_mm=roughness_mm,
@@ -407,6 +419,9 @@ def render_hydraulics() -> None:
             elevation_change_unit=elevation_unit,
             fitting_k_total=fitting_k_total,
         )
+        rec = recommend_schedule_10s_size(rows)
+        if rec is not None:
+            st.success(f"Recommended size: {rec.pipe_label} — {rec.reason}")
         df = pd.DataFrame([
             {
                 "Pipe": row.pipe_label,
@@ -419,8 +434,52 @@ def render_hydraulics() -> None:
             }
             for row in rows
         ])
-        st.subheader("Schedule 10S size comparison")
         st.dataframe(df, use_container_width=True)
+
+    with tabs[2]:
+        c1, c2, c3 = st.columns(3)
+        efficiency = c1.number_input("Pump efficiency (fraction)", min_value=0.05, max_value=1.0, value=0.70, key="hyd_pump_eff")
+        power_unit = c2.selectbox("Pump power output unit", POWER_UNITS, index=0, key="hyd_power_out")
+        pump_power = calculate_pump_power(volumetric_flow_to_m3_h(flow_value, flow_unit), result.total_dynamic_head_m, density_kg_m3, efficiency)
+        c1.metric("Hydraulic power", f"{kw_to_power(pump_power.hydraulic_power_kw, power_unit):,.2f} {power_unit}")
+        c2.metric("Brake power", f"{kw_to_power(pump_power.brake_power_kw, power_unit):,.2f} {power_unit}")
+        c3.metric("Brake horsepower", f"{pump_power.brake_horsepower_hp:,.2f} hp")
+        _show_notes(pump_power.notes)
+
+        st.subheader("NPSHa screen")
+        n1, n2, n3, n4 = st.columns(4)
+        surface_pressure = n1.number_input("Tank / surface pressure", value=0.0, key="hyd_npsh_surface_pressure")
+        surface_pressure_unit = n2.selectbox("Surface pressure unit", PRESSURE_UNITS, index=6, key="hyd_npsh_surface_unit")
+        static_head_m = n3.number_input("Static suction head (+ flooded / - lift)", value=2.0, key="hyd_npsh_static_head")
+        liquid_temp = n4.number_input("Liquid temperature (°C)", value=35.0, key="hyd_npsh_temp")
+        suction_loss = st.number_input("Suction-line loss (head, m)", value=max(result.head_loss_m * 0.3, 0.1), key="hyd_npsh_loss")
+        npsha = estimate_npsha(surface_pressure, surface_pressure_unit, static_head_m, suction_loss, liquid_temp, result.velocity_m_s, density_kg_m3)
+        st.metric("NPSHa", f"{npsha.npsha_m:,.2f} m")
+        _show_notes(npsha.notes)
+        st.json(asdict(npsha))
+
+    with tabs[3]:
+        st.caption("Enter up to three sequential piping sections to estimate total system TDH and pressure drop.")
+        default_segments = [
+            ("Suction", 2.157 * 25.4, 12.0, 0.5, 1.5),
+            ("Discharge main", 2.157 * 25.4, 90.0, 0.045, 8.0),
+            ("Final rise", 2.157 * 25.4, 18.0, 0.045, 4.0),
+        ]
+        segments = []
+        for idx, (name, default_id_mm, default_len, default_rough, default_k) in enumerate(default_segments, start=1):
+            st.markdown(f"Section {idx}: {name}")
+            s1, s2, s3, s4, s5 = st.columns(5)
+            seg_name = s1.text_input("Name", value=name, key=f"seg_name_{idx}")
+            seg_id = s2.number_input("ID (mm)", value=default_id_mm, key=f"seg_id_{idx}")
+            seg_len = s3.number_input("Length (m)", value=default_len, key=f"seg_len_{idx}")
+            seg_elev = s4.number_input("Elevation change (m)", value=0.0 if idx != 3 else 8.0, key=f"seg_elev_{idx}")
+            seg_k = s5.number_input("Total K", value=default_k, key=f"seg_k_{idx}")
+            segments.append(PipeSegment(seg_name, seg_id, seg_len, default_rough, seg_elev, seg_k))
+        seg_result = calculate_segmented_system(volumetric_flow_to_m3_h(flow_value, flow_unit), density_kg_m3, viscosity_cp, segments)
+        st.metric("Segmented system TDH", f"{seg_result.total_dynamic_head_m:,.2f} m")
+        st.metric("Segmented system ΔP", f"{seg_result.total_pressure_drop_kpa:,.2f} kPa")
+        st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
+        _show_notes(seg_result.notes)
 
 
 
@@ -689,7 +748,7 @@ def render_roadmap() -> None:
     st.header("Roadmap")
     roadmap = [
         {"priority": 1, "area": "Solution BPE", "next_step": "Refine >60 DS citric estimation with better literature and extend stronger product-specific fructose/dextrose correlations."},
-        {"priority": 2, "area": "Hydraulics", "next_step": "Add pump power, NPSH screen, branch networks, and suction/discharge system breakdowns."},
+        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch networks, control-valve Cv, and pump/system curve overlays."},
         {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
