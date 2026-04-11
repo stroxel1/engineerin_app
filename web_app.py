@@ -11,13 +11,49 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from engineering_app.core.cases import CaseStore
+from engineering_app.core.citric_bpe import estimate_capacity_impact_from_bpe, estimate_citric_bpe
 from engineering_app.core.crystallizers import CrystallizerInputs, estimate_crystallizer
 from engineering_app.core.curves import evaluate_operating_point, make_curve_from_xy_rows
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
 from engineering_app.core.hydraulics import calculate_hydraulics_with_units
-from engineering_app.core.quicktools import flash_fraction, pressure_conversion, steam_for_duty, temperature_conversion, thermal_point
+from engineering_app.core.quicktools import (
+    dilution_water,
+    flash_fraction,
+    pressure_conversion,
+    solution_properties,
+    steam_for_duty,
+    temperature_conversion,
+    thermal_point,
+)
+from engineering_app.core.solutions import PRODUCT_PROFILES
 from engineering_app.core.steam import duty_from_steam_flow
-from engineering_app.core.units import LENGTH_UNITS, MASS_FLOW_UNITS, PRESSURE_UNITS, TEMPERATURE_UNITS, VOLUME_UNITS, VOLUMETRIC_FLOW_UNITS
+from engineering_app.core.units import (
+    DELTA_TEMPERATURE_UNITS,
+    DENSITY_UNITS,
+    LENGTH_UNITS,
+    MASS_FLOW_UNITS,
+    PERCENT_UNITS,
+    POWER_UNITS,
+    PRESSURE_UNITS,
+    TEMPERATURE_UNITS,
+    TIME_UNITS,
+    VELOCITY_UNITS,
+    VISCOSITY_UNITS,
+    VOLUME_UNITS,
+    VOLUMETRIC_FLOW_UNITS,
+    c_to_delta_temperature,
+    c_to_temperature,
+    cp_to_viscosity,
+    kg_h_to_mass_flow,
+    kg_m3_to_density,
+    kpa_abs_to_pressure,
+    kw_to_power,
+    m3_h_to_volumetric_flow,
+    m3_to_volume,
+    m_s_to_velocity,
+    m_to_length,
+    seconds_to_time,
+)
 from engineering_app.io.normalizers import normalize_inspection
 from engineering_app.io.workbook_inspector import inspect_workbook
 
@@ -25,11 +61,13 @@ st.set_page_config(page_title="Engineering App", page_icon="⚙️", layout="wid
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CASE_STORE = CaseStore(PROJECT_ROOT / "data" / "cases")
+GENERIC_CURVE_UNITS = MASS_FLOW_UNITS + VOLUMETRIC_FLOW_UNITS + PRESSURE_UNITS + TEMPERATURE_UNITS + POWER_UNITS
 
 
 def _show_notes(notes: list[str]) -> None:
     for note in notes:
         st.caption(f"- {note}")
+
 
 
 def _remember_case(page: str, inputs: dict, result: dict) -> None:
@@ -40,13 +78,42 @@ def _remember_case(page: str, inputs: dict, result: dict) -> None:
     }
 
 
+
+def _pressure_delta_from_kpa(value_kpa: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "kpa":
+        return value_kpa
+    if u in {"psi", "psid", "psig"}:
+        return value_kpa / 6.894757293168361
+    if u in {"bar", "barg", "bara"}:
+        return value_kpa / 100.0
+    raise ValueError(f"Unsupported differential pressure unit: {unit}")
+
+
+
+def _display_percent(value_fraction: float, unit: str) -> float:
+    return value_fraction * 100.0 if unit == "%" else value_fraction
+
+
+
+def _display_temperature(value_c: float, unit: str) -> float:
+    return c_to_temperature(value_c, unit)
+
+
+
+def _display_delta_t(value_c: float, unit: str) -> float:
+    return c_to_delta_temperature(value_c, unit)
+
+
+
 def render_dashboard() -> None:
     st.title("Engineering App")
-    st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, and workbook inspection.")
-    cols = st.columns(5)
+    st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, solution properties, and workbook inspection.")
+    cols = st.columns(6)
     cards = [
-        ("Quick tools", "Pressure, temperature, and thermal conversions"),
-        ("Hydraulics", "Velocity, pressure drop, TDH, and line residence time"),
+        ("Quick tools", "Conversions, flash steam, and dilution"),
+        ("Citric BPE", "15-60 DS table plus >60 DS screening estimate"),
+        ("Hydraulics", "Velocity, pressure drop, TDH, and residence time"),
         ("Steam jets", "Curve comparison and operating-point screening"),
         ("Evaporators", "Duty, steam demand, and ΔT screen"),
         ("Crystallizers", "Yield, slurry rate, circulation ratio, and residence time"),
@@ -60,78 +127,217 @@ def render_dashboard() -> None:
 
 def render_quick_tools() -> None:
     st.header("Quick Tools")
-    tab1, tab2, tab3, tab4 = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash"])
+    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Dilution"])
+    product_options = list(PRODUCT_PROFILES.keys())
+    product_labels = {key: PRODUCT_PROFILES[key].display_name for key in product_options}
 
-    with tab1:
+    with tabs[0]:
         c1, c2, c3 = st.columns(3)
-        value = c1.number_input("Pressure value", value=15.0)
-        from_unit = c2.selectbox("From unit", PRESSURE_UNITS, index=5)
-        to_unit = c3.selectbox("To unit", PRESSURE_UNITS, index=0)
+        value = c1.number_input("Pressure value", value=15.0, key="qt_pressure_value")
+        from_unit = c2.selectbox("From unit", PRESSURE_UNITS, index=5, key="qt_pressure_from")
+        to_unit = c3.selectbox("To unit", PRESSURE_UNITS, index=0, key="qt_pressure_to")
         result = pressure_conversion(value, from_unit, to_unit)
         st.metric("Converted pressure", f"{result:,.3f} {to_unit}")
-        _remember_case("quick-tools-pressure", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_pressure": result})
+        _remember_case("quick-tools-pressure", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_pressure": result, "output_unit": to_unit})
 
-    with tab2:
+    with tabs[1]:
         c1, c2, c3 = st.columns(3)
-        value = c1.number_input("Temperature value", value=212.0)
-        from_unit = c2.selectbox("From unit", TEMPERATURE_UNITS, index=1)
-        to_unit = c3.selectbox("To unit", TEMPERATURE_UNITS, index=0)
+        value = c1.number_input("Temperature value", value=212.0, key="qt_temp_value")
+        from_unit = c2.selectbox("From unit", TEMPERATURE_UNITS, index=1, key="qt_temp_from")
+        to_unit = c3.selectbox("To unit", TEMPERATURE_UNITS, index=0, key="qt_temp_to")
         result = temperature_conversion(value, from_unit, to_unit)
         st.metric("Converted temperature", f"{result:,.2f} °{to_unit}")
-        _remember_case("quick-tools-temperature", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_temperature": result})
+        _remember_case("quick-tools-temperature", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_temperature": result, "output_unit": to_unit})
 
-    with tab3:
-        c1, c2, c3 = st.columns(3)
-        pressure_value = c1.number_input("Operating pressure", value=25.0)
-        pressure_unit = c2.selectbox("Pressure basis", PRESSURE_UNITS, index=0, key="tp_unit")
-        bpe_c = c3.number_input("BPE (°C)", value=3.0)
-        point = thermal_point(pressure_value, pressure_unit, bpe_c)
-        point_dict = asdict(point)
-        st.json(point_dict)
-        _remember_case("quick-tools-thermal-point", {"pressure_value": pressure_value, "pressure_unit": pressure_unit, "bpe_c": bpe_c}, point_dict)
-
-    with tab4:
+    with tabs[2]:
         c1, c2, c3, c4 = st.columns(4)
-        condensate_temp_c = c1.number_input("Condensate temperature (°C)", value=120.0)
-        flash_pressure_value = c2.number_input("Flash pressure", value=10.0)
-        flash_pressure_unit = c3.selectbox("Flash pressure unit", PRESSURE_UNITS, index=0, key="flash_unit")
-        condensate_flow = c4.number_input("Condensate flow (kg/h)", value=10000.0)
-        result = flash_fraction(condensate_temp_c, flash_pressure_value, flash_pressure_unit, condensate_flow)
-        result_dict = asdict(result)
+        pressure_value = c1.number_input("Operating pressure", value=25.0, key="qt_tp_pressure")
+        pressure_unit = c2.selectbox("Pressure basis", PRESSURE_UNITS, index=0, key="qt_tp_pressure_unit")
+        bpe_value = c3.number_input("BPE", value=3.0, key="qt_tp_bpe")
+        bpe_unit = c4.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="qt_tp_bpe_unit")
+        output_temp_unit = st.selectbox("Output temperature unit", TEMPERATURE_UNITS, index=0, key="qt_tp_temp_out")
+        point = thermal_point(pressure_value, pressure_unit, bpe_value if bpe_unit == "C" else bpe_value * 5.0 / 9.0)
+        st.json(
+            {
+                "pressure": f"{kpa_abs_to_pressure(point.pressure_kpa_abs, pressure_unit):,.3f} {pressure_unit}",
+                "saturation_temperature": f"{_display_temperature(point.saturation_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}",
+                "boiling_temperature": f"{_display_temperature(point.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}",
+                "condensing_temperature": f"{_display_temperature(point.condensing_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}",
+                "bpe": f"{_display_delta_t(point.bpe_c, bpe_unit):,.2f} °{bpe_unit}",
+            }
+        )
+
+    with tabs[3]:
+        c1, c2, c3, c4 = st.columns(4)
+        condensate_temp = c1.number_input("Condensate temperature", value=120.0, key="qt_flash_temp")
+        temp_unit = c2.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="qt_flash_temp_unit")
+        flash_pressure_value = c3.number_input("Flash pressure", value=10.0, key="qt_flash_pressure")
+        flash_pressure_unit = c4.selectbox("Flash pressure unit", PRESSURE_UNITS, index=0, key="qt_flash_pressure_unit")
+        c5, c6, c7 = st.columns(3)
+        condensate_flow = c5.number_input("Condensate flow", value=10000.0, key="qt_flash_flow")
+        condensate_flow_unit = c6.selectbox("Flow unit", MASS_FLOW_UNITS, index=0, key="qt_flash_flow_unit")
+        output_flow_unit = c7.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="qt_flash_flow_out")
+        temp_c = condensate_temp if temp_unit == "C" else (condensate_temp - 32.0) * 5.0 / 9.0
+        condensate_flow_kg_h = condensate_flow if condensate_flow_unit == "kg/h" else None
+        from engineering_app.core.units import mass_flow_to_kg_h
+        result = flash_fraction(temp_c, flash_pressure_value, flash_pressure_unit, mass_flow_to_kg_h(condensate_flow, condensate_flow_unit))
         m1, m2, m3 = st.columns(3)
         m1.metric("Flash fraction", f"{result.flash_fraction:.3f}")
-        m2.metric("Flash steam", f"{result.flash_steam_kg_h:,.1f} kg/h")
-        m3.metric("Remaining liquid", f"{result.remaining_liquid_kg_h:,.1f} kg/h")
+        m2.metric("Flash steam", f"{kg_h_to_mass_flow(result.flash_steam_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m3.metric("Remaining liquid", f"{kg_h_to_mass_flow(result.remaining_liquid_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
         _show_notes(result.notes)
-        _remember_case("quick-tools-flash", {"condensate_temp_c": condensate_temp_c, "flash_pressure_value": flash_pressure_value, "flash_pressure_unit": flash_pressure_unit, "condensate_flow_kg_h": condensate_flow}, result_dict)
+
+    with tabs[4]:
+        c1, c2, c3 = st.columns(3)
+        product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_solution_product")
+        solids_wt_pct = c2.number_input("Solids concentration (wt%)", min_value=0.0, max_value=95.0, value=55.0, key="qt_solution_solids")
+        temperature_value = c3.number_input("Solution temperature", value=45.0, key="qt_solution_temp")
+        c4, c5, c6, c7 = st.columns(4)
+        temperature_unit = c4.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="qt_solution_temp_unit")
+        pressure_value = c5.number_input("Operating pressure", value=20.0, key="qt_solution_pressure")
+        pressure_unit = c6.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="qt_solution_pressure_unit")
+        flow_value = c7.number_input("Optional solution flow", min_value=0.0, value=12000.0, key="qt_solution_flow")
+        c8, c9, c10, c11 = st.columns(4)
+        flow_unit = c8.selectbox("Flow unit", MASS_FLOW_UNITS, index=0, key="qt_solution_flow_unit")
+        density_unit = c9.selectbox("Density output unit", DENSITY_UNITS, index=0, key="qt_solution_density_out")
+        bpe_unit = c10.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="qt_solution_bpe_out")
+        viscosity_unit = c11.selectbox("Viscosity output unit", VISCOSITY_UNITS, index=0, key="qt_solution_visc_out")
+        output_temp_unit = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="qt_solution_temp_out")
+
+        temperature_c = temperature_value if temperature_unit == "C" else (temperature_value - 32.0) * 5.0 / 9.0
+        result = solution_properties(product, solids_wt_pct, temperature_c, pressure_value, pressure_unit, flow_value if flow_value > 0 else None, flow_unit)
+        result_dict = asdict(result)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Estimated density", f"{kg_m3_to_density(result.estimated_density_kg_m3, density_unit):,.2f} {density_unit}")
+        m2.metric("Estimated BPE", f"{_display_delta_t(result.estimated_bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+        m3.metric("Estimated viscosity", f"{cp_to_viscosity(result.estimated_viscosity_cp, viscosity_unit):,.3f} {viscosity_unit}")
+        m4.metric("Boiling point", f"{_display_temperature(result.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+        st.json(result_dict)
+        _show_notes(result.notes)
+
+    with tabs[5]:
+        c1, c2, c3 = st.columns(3)
+        product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_dilution_product")
+        feed_rate_value = c2.number_input("Feed flow", min_value=0.0, value=10000.0, key="qt_dilution_flow")
+        feed_rate_unit = c3.selectbox("Feed flow unit", MASS_FLOW_UNITS, index=0, key="qt_dilution_flow_unit")
+        c4, c5, c6 = st.columns(3)
+        feed_solids_wt_pct = c4.number_input("Feed solids (wt%)", min_value=0.0, max_value=95.0, value=70.0, key="qt_dilution_feed_solids")
+        target_solids_wt_pct = c5.number_input("Target solids after dilution (wt%)", min_value=0.1, max_value=95.0, value=55.0, key="qt_dilution_target_solids")
+        output_flow_unit = c6.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="qt_dilution_flow_out")
+        try:
+            result = dilution_water(product, feed_rate_value, feed_rate_unit, feed_solids_wt_pct, target_solids_wt_pct)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Water to add", f"{kg_h_to_mass_flow(result.required_water_addition_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            m2.metric("Final flow", f"{kg_h_to_mass_flow(result.final_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            m3.metric("Solids held constant", f"{kg_h_to_mass_flow(result.solids_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            st.json(asdict(result))
+            _show_notes(result.notes)
+        except ValueError as exc:
+            st.error(str(exc))
+
+
+
+def render_citric_bpe() -> None:
+    st.header("Citric BPE")
+    tabs = st.tabs(["BPE estimate", "Capacity impact"]) 
+
+    with tabs[0]:
+        c1, c2, c3, c4 = st.columns(4)
+        ds = c1.number_input("Citric DS (wt%)", min_value=0.0, max_value=90.0, value=62.0, key="citric_ds")
+        pressure_value = c2.number_input("Operating pressure", value=20.0, key="citric_pressure")
+        pressure_unit = c3.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="citric_pressure_unit")
+        method = c4.selectbox(
+            "Method",
+            ["auto", "table", "high_solids"],
+            format_func=lambda key: {
+                "auto": "Auto (table to 60 DS, high-solids estimate above 60)",
+                "table": "Workbook table / interpolation",
+                "high_solids": "Workbook >60 DS estimate",
+            }[key],
+            key="citric_method",
+        )
+        c5, c6 = st.columns(2)
+        bpe_unit = c5.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_bpe_out")
+        temp_unit = c6.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="citric_temp_out")
+
+        result = estimate_citric_bpe(ds, pressure_value, pressure_unit, method=method)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("BPE", f"{_display_delta_t(result.bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+        m2.metric("Saturation temp", f"{_display_temperature(result.saturation_temperature_c, temp_unit):,.2f} °{temp_unit}")
+        m3.metric("Boiling temp", f"{_display_temperature(result.boiling_temperature_c, temp_unit):,.2f} °{temp_unit}")
+        m4.metric("Method", result.method)
+        st.json(asdict(result))
+        _show_notes(result.notes)
+        _remember_case("citric-bpe", {"ds_wt_pct": ds, "pressure_value": pressure_value, "pressure_unit": pressure_unit, "method": method, "bpe_output_unit": bpe_unit, "temperature_output_unit": temp_unit}, asdict(result))
+
+    with tabs[1]:
+        c1, c2, c3, c4 = st.columns(4)
+        steam_temp = c1.number_input("Steam temperature", value=180.0, key="citric_cap_steam_temp")
+        steam_temp_unit = c2.selectbox("Steam temperature unit", TEMPERATURE_UNITS, index=0, key="citric_cap_steam_temp_unit")
+        pressure_value = c3.number_input("Operating pressure", value=20.0, key="citric_cap_pressure")
+        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="citric_cap_pressure_unit")
+        c5, c6, c7, c8 = st.columns(4)
+        current_bpe = c5.number_input("Current BPE", value=6.0, key="citric_cap_current_bpe")
+        new_bpe = c6.number_input("New BPE", value=10.0, key="citric_cap_new_bpe")
+        bpe_unit = c7.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_cap_bpe_unit")
+        dt_unit = c8.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="citric_cap_dt_out")
+        temp_unit_out = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="citric_cap_temp_out")
+
+        steam_temp_c = steam_temp if steam_temp_unit == "C" else (steam_temp - 32.0) * 5.0 / 9.0
+        current_bpe_c = current_bpe if bpe_unit == "C" else current_bpe * 5.0 / 9.0
+        new_bpe_c = new_bpe if bpe_unit == "C" else new_bpe * 5.0 / 9.0
+        impact = estimate_capacity_impact_from_bpe(steam_temp_c, pressure_value, pressure_unit, current_bpe_c, new_bpe_c)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Current ΔT", f"{_display_delta_t(impact.current_delta_t_c, dt_unit):,.2f} °{dt_unit}")
+        m2.metric("New ΔT", f"{_display_delta_t(impact.new_delta_t_c, dt_unit):,.2f} °{dt_unit}")
+        m3.metric("Relative capacity change", f"{impact.relative_capacity_change_pct:,.1f} %")
+        st.json(
+            {
+                **asdict(impact),
+                "steam_temperature_display": f"{_display_temperature(impact.steam_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}",
+                "saturation_temperature_display": f"{_display_temperature(impact.saturation_temperature_c, temp_unit_out):,.2f} °{temp_unit_out}",
+            }
+        )
+        _show_notes(impact.notes)
 
 
 
 def render_hydraulics() -> None:
     st.header("Hydraulics")
     c1, c2, c3, c4 = st.columns(4)
-    flow_value = c1.number_input("Flow", value=100.0)
-    flow_unit = c2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0)
-    density = c3.number_input("Density (kg/m³)", value=998.0)
-    viscosity = c4.number_input("Viscosity (cP)", value=1.0)
+    flow_value = c1.number_input("Flow", value=100.0, key="hyd_flow")
+    flow_unit = c2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_flow_unit")
+    density = c3.number_input("Density", value=998.0, key="hyd_density")
+    density_unit = c4.selectbox("Density unit", DENSITY_UNITS, index=0, key="hyd_density_unit")
 
     c5, c6, c7, c8 = st.columns(4)
-    pipe_id = c5.number_input("Pipe ID", value=52.5)
-    pipe_id_unit = c6.selectbox("Pipe ID unit", LENGTH_UNITS, index=2)
-    pipe_length = c7.number_input("Pipe length", value=120.0)
-    pipe_length_unit = c8.selectbox("Pipe length unit", LENGTH_UNITS, index=0)
+    viscosity = c5.number_input("Viscosity", value=1.0, key="hyd_viscosity")
+    viscosity_unit = c6.selectbox("Viscosity unit", VISCOSITY_UNITS, index=0, key="hyd_viscosity_unit")
+    pipe_id = c7.number_input("Pipe ID", value=52.5, key="hyd_pipe_id")
+    pipe_id_unit = c8.selectbox("Pipe ID unit", LENGTH_UNITS, index=2, key="hyd_pipe_id_unit")
 
     c9, c10, c11, c12 = st.columns(4)
-    roughness_mm = c9.number_input("Roughness (mm)", value=0.045)
-    elevation_change = c10.number_input("Elevation change", value=12.0)
-    elevation_unit = c11.selectbox("Elevation unit", LENGTH_UNITS, index=0)
-    fitting_k = c12.number_input("Total fitting K", value=8.0)
+    pipe_length = c9.number_input("Pipe length", value=120.0, key="hyd_pipe_len")
+    pipe_length_unit = c10.selectbox("Pipe length unit", LENGTH_UNITS, index=0, key="hyd_pipe_len_unit")
+    roughness_mm = c11.number_input("Roughness (mm)", value=0.045, key="hyd_roughness")
+    fitting_k = c12.number_input("Total fitting K", value=8.0, key="hyd_fit_k")
 
+    c13, c14, c15, c16 = st.columns(4)
+    elevation_change = c13.number_input("Elevation change", value=12.0, key="hyd_elev")
+    elevation_unit = c14.selectbox("Elevation unit", LENGTH_UNITS, index=0, key="hyd_elev_unit")
+    velocity_unit = c15.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
+    head_unit = c16.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
+    c17, c18, c19 = st.columns(3)
+    dp_unit = c17.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
+    residence_unit = c18.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
+    volume_unit = c19.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
+
+    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
     result = calculate_hydraulics_with_units(
         volumetric_flow_value=flow_value,
         volumetric_flow_unit=flow_unit,
-        density_kg_m3=density,
-        viscosity_cp=viscosity,
+        density_kg_m3=density_to_kg_m3(density, density_unit),
+        viscosity_cp=viscosity_to_cp(viscosity, viscosity_unit),
         pipe_id_value=pipe_id,
         pipe_id_unit=pipe_id_unit,
         pipe_length_value=pipe_length,
@@ -141,63 +347,54 @@ def render_hydraulics() -> None:
         elevation_change_unit=elevation_unit,
         fitting_k_total=fitting_k,
     )
-    result_dict = asdict(result)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Velocity", f"{result.velocity_m_s:,.2f} m/s")
-    m2.metric("Pressure drop", f"{result.pressure_drop_kpa:,.1f} kPa")
-    m3.metric("TDH", f"{result.total_dynamic_head_m:,.1f} m")
-    m4.metric("Residence time", f"{result.residence_time_s:,.1f} s")
-    st.json(result_dict)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Velocity", f"{m_s_to_velocity(result.velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
+    m2.metric("Pressure drop", f"{_pressure_delta_from_kpa(result.pressure_drop_kpa, dp_unit):,.2f} {dp_unit}")
+    m3.metric("TDH", f"{m_to_length(result.total_dynamic_head_m, head_unit):,.2f} {head_unit}")
+    m4.metric("Residence time", f"{seconds_to_time(result.residence_time_s, residence_unit):,.2f} {residence_unit}")
+    m5.metric("Line volume", f"{m3_to_volume(result.line_volume_m3, volume_unit):,.3f} {volume_unit}")
+    st.json(asdict(result))
     _show_notes(result.notes)
-    _remember_case("hydraulics", {"flow_value": flow_value, "flow_unit": flow_unit, "density_kg_m3": density, "viscosity_cp": viscosity, "pipe_id": pipe_id, "pipe_id_unit": pipe_id_unit, "pipe_length": pipe_length, "pipe_length_unit": pipe_length_unit, "roughness_mm": roughness_mm, "elevation_change": elevation_change, "elevation_unit": elevation_unit, "fitting_k_total": fitting_k}, result_dict)
 
 
 
 def render_steam_jets() -> None:
     st.header("Steam Jets / Thermo-Compressors")
-    st.write("Enter a vendor or inferred performance curve and compare one operating point against it.")
-
+    st.write("Enter a performance curve and compare one operating point against it. Units are selectable and apply to the editor and displayed results.")
+    c0, c00 = st.columns(2)
+    x_unit = c0.selectbox("X-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_x_unit")
+    y_unit = c00.selectbox("Y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_y_unit")
     default_curve = pd.DataFrame(
         [
-            {"suction_load_kg_h": 2000.0, "motive_steam_kg_h": 3200.0},
-            {"suction_load_kg_h": 4000.0, "motive_steam_kg_h": 5000.0},
-            {"suction_load_kg_h": 6000.0, "motive_steam_kg_h": 7100.0},
-            {"suction_load_kg_h": 8000.0, "motive_steam_kg_h": 9500.0},
+            {"suction_load": 2000.0, "motive_steam": 3200.0},
+            {"suction_load": 4000.0, "motive_steam": 5000.0},
+            {"suction_load": 6000.0, "motive_steam": 7100.0},
+            {"suction_load": 8000.0, "motive_steam": 9500.0},
         ]
     )
-    edited = st.data_editor(default_curve, num_rows="dynamic", use_container_width=True)
-
+    edited = st.data_editor(default_curve, num_rows="dynamic", use_container_width=True, key="sj_editor")
     c1, c2, c3, c4 = st.columns(4)
-    curve_name = c1.text_input("Curve name", value="Thermo-compressor A")
-    x_col = c2.selectbox("X column", list(edited.columns), index=0)
-    y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0)
-    family = c4.text_input("Family / motive basis", value="Motive 3.5 barg")
-
-    operating_x = st.number_input("Operating suction load / x-value", value=5000.0)
-    actual_y = st.number_input("Actual motive steam / y-value", value=6200.0)
-
+    curve_name = c1.text_input("Curve name", value="Thermo-compressor A", key="sj_curve_name")
+    x_col = c2.selectbox("X column", list(edited.columns), index=0, key="sj_xcol")
+    y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0, key="sj_ycol")
+    family = c4.text_input("Family / motive basis", value="Motive 3.5 barg", key="sj_family")
+    operating_x = st.number_input("Operating x-value", value=5000.0, key="sj_x")
+    actual_y = st.number_input("Actual y-value", value=6200.0, key="sj_y")
     rows = edited.to_dict(orient="records")
     curve = make_curve_from_xy_rows(curve_name, x_col, y_col, rows, family=family)
     result = evaluate_operating_point(curve, operating_x, actual_y)
-    result_dict = asdict(result)
-
-    plot_df = edited.copy()
-    predicted_y = result.predicted_y
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=plot_df[x_col], y=plot_df[y_col], mode="lines+markers", name="Curve"))
-    fig.add_trace(go.Scatter(x=[operating_x], y=[predicted_y], mode="markers", marker=dict(size=12), name="Predicted point"))
+    fig.add_trace(go.Scatter(x=edited[x_col], y=edited[y_col], mode="lines+markers", name="Curve"))
+    fig.add_trace(go.Scatter(x=[operating_x], y=[result.predicted_y], mode="markers", marker=dict(size=12), name="Predicted point"))
     fig.add_trace(go.Scatter(x=[operating_x], y=[actual_y], mode="markers", marker=dict(size=12, symbol="diamond"), name="Actual point"))
-    fig.update_layout(xaxis_title=x_col, yaxis_title=y_col, title="Steam-Jet Operating Point vs Curve")
+    fig.update_layout(xaxis_title=f"{x_col} ({x_unit})", yaxis_title=f"{y_col} ({y_unit})", title="Steam-Jet Operating Point vs Curve")
     st.plotly_chart(fig, use_container_width=True)
-
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Predicted y", f"{result.predicted_y:,.1f}")
-    m2.metric("Actual y", f"{result.actual_y:,.1f}")
+    m1.metric("Predicted y", f"{result.predicted_y:,.1f} {y_unit}")
+    m2.metric("Actual y", f"{result.actual_y:,.1f} {y_unit}")
     m3.metric("% of curve", f"{result.percent_of_curve:,.1f}%")
     m4.metric("Deviation", f"{result.deviation_pct:,.1f}%")
     _show_notes(result.notes)
-    st.json({"curve": asdict(curve), "operating_point_result": result_dict})
-    _remember_case("steam-jets", {"curve_name": curve_name, "family": family, "x_column": x_col, "y_column": y_col, "curve_rows": rows, "operating_x": operating_x, "actual_y": actual_y}, {"curve": asdict(curve), "operating_point_result": result_dict})
 
 
 
@@ -206,50 +403,73 @@ def render_steam() -> None:
     tab1, tab2 = st.tabs(["Steam for duty", "Duty from steam"])
 
     with tab1:
-        c1, c2, c3 = st.columns(3)
-        duty_kw = c1.number_input("Duty (kW)", value=2500.0)
-        pressure_value = c2.number_input("Steam pressure", value=3.5)
-        pressure_unit = c3.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_for_duty_unit")
-        result = steam_for_duty(duty_kw, pressure_value, pressure_unit)
-        result_dict = asdict(result)
-        st.json(result_dict)
+        c1, c2, c3, c4 = st.columns(4)
+        duty_value = c1.number_input("Duty", value=2500.0, key="steam_duty_value")
+        duty_unit = c2.selectbox("Duty unit", POWER_UNITS, index=0, key="steam_duty_unit")
+        pressure_value = c3.number_input("Steam pressure", value=3.5, key="steam_pressure_value")
+        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_pressure_unit")
+        steam_flow_out_unit = st.selectbox("Steam-flow output unit", MASS_FLOW_UNITS, index=0, key="steam_flow_out_unit")
+        from engineering_app.core.units import power_to_kw
+        result = steam_for_duty(power_to_kw(duty_value, duty_unit), pressure_value, pressure_unit)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Steam required", f"{kg_h_to_mass_flow(result.steam_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
+        m2.metric("Condensate", f"{kg_h_to_mass_flow(result.condensate_flow_kg_h, steam_flow_out_unit):,.1f} {steam_flow_out_unit}")
+        m3.metric("Condensing temperature", f"{result.condensing_temperature_c:,.2f} °C")
         _show_notes(result.notes)
-        _remember_case("steam-for-duty", {"duty_kw": duty_kw, "pressure_value": pressure_value, "pressure_unit": pressure_unit}, result_dict)
 
     with tab2:
-        c1, c2, c3, c4 = st.columns(4)
-        steam_flow = c1.number_input("Steam flow", value=4000.0)
-        steam_flow_unit = c2.selectbox("Steam flow unit", MASS_FLOW_UNITS, index=0)
-        pressure_value = c3.number_input("Steam pressure", value=3.5)
-        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="duty_from_steam_unit")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        steam_flow = c1.number_input("Steam flow", value=4000.0, key="steam_flow_value")
+        steam_flow_unit = c2.selectbox("Steam flow unit", MASS_FLOW_UNITS, index=0, key="steam_flow_unit")
+        pressure_value = c3.number_input("Steam pressure", value=3.5, key="steam_pressure_value_2")
+        pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_pressure_unit_2")
+        duty_out_unit = c5.selectbox("Duty output unit", POWER_UNITS, index=0, key="steam_duty_out_unit")
         result = duty_from_steam_flow(steam_flow, steam_flow_unit, pressure_value, pressure_unit)
-        result_dict = asdict(result)
-        st.json(result_dict)
+        st.metric("Available duty", f"{kw_to_power(result.duty_kw, duty_out_unit):,.1f} {duty_out_unit}")
         _show_notes(result.notes)
-        _remember_case("duty-from-steam", {"steam_flow": steam_flow, "steam_flow_unit": steam_flow_unit, "pressure_value": pressure_value, "pressure_unit": pressure_unit}, result_dict)
 
 
 
 def render_evaporators() -> None:
     st.header("Evaporators")
     c1, c2, c3, c4 = st.columns(4)
-    feed_rate = c1.number_input("Feed rate", value=25000.0)
-    feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0)
-    feed_solids = c3.number_input("Feed solids (wt%)", value=12.0)
-    product_solids = c4.number_input("Product solids (wt%)", value=50.0)
-
+    feed_rate = c1.number_input("Feed rate", value=25000.0, key="ev_feed_rate")
+    feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="ev_feed_rate_unit")
+    feed_solids = c3.number_input("Feed solids (wt%)", value=12.0, key="ev_feed_solids")
+    product_solids = c4.number_input("Product solids (wt%)", value=50.0, key="ev_prod_solids")
     c5, c6, c7, c8 = st.columns(4)
-    steam_pressure = c5.number_input("Steam pressure", value=3.5)
-    steam_pressure_unit = c6.selectbox("Steam pressure unit", PRESSURE_UNITS, index=4, key="evap_steam_unit")
-    operating_pressure = c7.number_input("Operating pressure", value=20.0)
-    operating_pressure_unit = c8.selectbox("Operating pressure unit", PRESSURE_UNITS, index=0, key="evap_op_unit")
-
+    steam_pressure = c5.number_input("Steam pressure", value=3.5, key="ev_steam_pressure")
+    steam_pressure_unit = c6.selectbox("Steam pressure unit", PRESSURE_UNITS, index=4, key="ev_steam_pressure_unit")
+    operating_pressure = c7.number_input("Operating pressure", value=20.0, key="ev_operating_pressure")
+    operating_pressure_unit = c8.selectbox("Operating pressure unit", PRESSURE_UNITS, index=0, key="ev_operating_pressure_unit")
     c9, c10, c11, c12 = st.columns(4)
-    passes = int(c9.number_input("Passes", min_value=1, value=2, step=1))
-    recirc = c10.number_input("Recirculation ratio", value=4.0)
-    bpe = c11.number_input("BPE (°C)", value=6.0)
-    duty_per_kg = c12.number_input("Specific evaporation duty (kJ/kg)", value=2250.0)
-
+    passes = int(c9.number_input("Passes", min_value=1, value=2, step=1, key="ev_passes"))
+    recirc = c10.number_input("Recirculation ratio", value=4.0, key="ev_recirc")
+    evaporator_product = c11.selectbox(
+        "Product / liquor",
+        ["manual", "citric_acid", "fructose", "dextrose", "sucrose"],
+        format_func=lambda key: "Manual BPE" if key == "manual" else PRODUCT_PROFILES[key].display_name,
+        key="ev_product",
+    )
+    duty_per_kg = c12.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_spec_duty")
+    bpe_unit = st.selectbox("Manual / displayed BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_bpe_unit")
+    if evaporator_product == "manual":
+        bpe_value = st.number_input("BPE", value=6.0, key="ev_bpe_manual")
+        bpe_c = bpe_value if bpe_unit == "C" else bpe_value * 5.0 / 9.0
+        st.caption("Manual BPE basis selected.")
+    elif evaporator_product == "citric_acid":
+        citric = estimate_citric_bpe(product_solids, operating_pressure, operating_pressure_unit, method="auto")
+        bpe_c = citric.bpe_c
+        st.caption(f"Auto-estimated citric BPE at {product_solids:.1f} wt%: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+        _show_notes(citric.notes)
+    else:
+        auto_props = solution_properties(evaporator_product, product_solids, 45.0, operating_pressure, operating_pressure_unit)
+        bpe_c = auto_props.estimated_bpe_c
+        st.caption(f"Auto-estimated BPE for {PRODUCT_PROFILES[evaporator_product].display_name}: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+    output_flow_unit = st.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_flow_out")
+    output_temp_unit = st.selectbox("Output temperature unit", TEMPERATURE_UNITS, index=0, key="ev_temp_out")
+    delta_t_unit = st.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_dt_out")
+    duty_output_unit = st.selectbox("Duty output unit", POWER_UNITS, index=0, key="ev_duty_out")
     result = estimate_evaporation(
         EvaporatorInputs(
             feed_rate_value=feed_rate,
@@ -262,48 +482,48 @@ def render_evaporators() -> None:
             operating_pressure_unit=operating_pressure_unit,
             passes=passes,
             recirculation_ratio=recirc,
-            bpe_c=bpe,
+            bpe_c=bpe_c,
             estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
         )
     )
-    result_dict = asdict(result)
-
     df = pd.DataFrame(
         [
-            {"Stream": "Feed", "kg/h": result.feed_rate_kg_h},
-            {"Stream": "Product", "kg/h": result.product_rate_kg_h},
-            {"Stream": "Evaporation", "kg/h": result.evaporation_rate_kg_h},
-            {"Stream": "Steam", "kg/h": result.estimated_steam_flow_kg_h},
+            {"Stream": "Feed", "value": kg_h_to_mass_flow(result.feed_rate_kg_h, output_flow_unit)},
+            {"Stream": "Product", "value": kg_h_to_mass_flow(result.product_rate_kg_h, output_flow_unit)},
+            {"Stream": "Evaporation", "value": kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit)},
+            {"Stream": "Steam", "value": kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit)},
         ]
     )
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.json(result_dict)
-        _show_notes(result.notes)
-    with col2:
-        st.plotly_chart(px.bar(df, x="Stream", y="kg/h", title="Evaporator Mass and Steam Screen"), use_container_width=True)
-    _remember_case("evaporators", {"feed_rate": feed_rate, "feed_rate_unit": feed_rate_unit, "feed_solids_wt_pct": feed_solids, "product_solids_wt_pct": product_solids, "steam_pressure": steam_pressure, "steam_pressure_unit": steam_pressure_unit, "operating_pressure": operating_pressure, "operating_pressure_unit": operating_pressure_unit, "passes": passes, "recirculation_ratio": recirc, "bpe_c": bpe, "specific_evaporation_duty_kj_kg": duty_per_kg}, result_dict)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Evaporation", f"{kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    m2.metric("Steam flow", f"{kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    m3.metric("Boiling temp", f"{_display_temperature(result.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+    m4.metric("ΔT", f"{_display_delta_t(result.delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
+    st.metric("Duty", f"{kw_to_power(result.estimated_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
+    st.plotly_chart(px.bar(df, x="Stream", y="value", title=f"Evaporator Streams ({output_flow_unit})"), use_container_width=True)
+    _show_notes(result.notes)
 
 
 
 def render_crystallizers() -> None:
     st.header("Crystallizers")
     c1, c2, c3, c4 = st.columns(4)
-    feed_rate = c1.number_input("Feed rate", value=12000.0)
-    feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="cr_feed_unit")
-    feed_solids = c3.number_input("Feed solids (wt%)", value=55.0)
-    mother_liquor_solids = c4.number_input("Mother liquor solids (wt%)", value=45.0)
-
+    feed_rate = c1.number_input("Feed rate", value=12000.0, key="cr_feed_rate")
+    feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="cr_feed_rate_unit")
+    feed_solids = c3.number_input("Feed solids (wt%)", value=55.0, key="cr_feed_solids")
+    mother_liquor_solids = c4.number_input("Mother liquor solids (wt%)", value=45.0, key="cr_mother_solids")
     c5, c6, c7, c8 = st.columns(4)
-    slurry_solids = c5.number_input("Target slurry solids (wt%)", value=25.0)
-    circulation = c6.number_input("Circulation rate", value=72000.0)
-    circulation_unit = c7.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0)
-    operating_temp = c8.number_input("Operating temperature (°C)", value=45.0)
-
-    c9, c10 = st.columns(2)
-    working_volume = c9.number_input("Working volume", value=18.0)
-    working_volume_unit = c10.selectbox("Working volume unit", VOLUME_UNITS, index=0)
-
+    slurry_solids = c5.number_input("Target slurry solids (wt%)", value=25.0, key="cr_slurry_solids")
+    circulation = c6.number_input("Circulation rate", value=72000.0, key="cr_circulation")
+    circulation_unit = c7.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
+    operating_temp = c8.number_input("Operating temperature", value=45.0, key="cr_temp")
+    c9, c10, c11, c12 = st.columns(4)
+    operating_temp_unit = c9.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
+    working_volume = c10.number_input("Working volume", value=18.0, key="cr_working_volume")
+    working_volume_unit = c11.selectbox("Working volume unit", VOLUME_UNITS, index=0, key="cr_working_volume_unit")
+    output_flow_unit = c12.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
+    residence_unit = st.selectbox("Residence-time output unit", TIME_UNITS, index=2, key="cr_time_out")
+    temp_c = operating_temp if operating_temp_unit == "C" else (operating_temp - 32.0) * 5.0 / 9.0
     result = estimate_crystallizer(
         CrystallizerInputs(
             feed_rate_value=feed_rate,
@@ -315,13 +535,19 @@ def render_crystallizers() -> None:
             circulation_rate_unit=circulation_unit,
             working_volume_value=working_volume,
             working_volume_unit=working_volume_unit,
-            operating_temperature_c=operating_temp,
+            operating_temperature_c=temp_c,
         )
     )
-    result_dict = asdict(result)
-    st.json(result_dict)
+    yield_unit = st.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Crystals", f"{kg_h_to_mass_flow(result.crystals_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    m2.metric("Mother liquor", f"{kg_h_to_mass_flow(result.mother_liquor_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    m3.metric("Circulation ratio", f"{result.circulation_ratio:,.2f}")
+    if result.residence_time_h is not None:
+        residence_s = result.residence_time_h * 3600.0
+        m4.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
+    st.metric("Yield", f"{_display_percent(result.yield_fraction_of_feed_solids, yield_unit):,.2f} {yield_unit}")
     _show_notes(result.notes)
-    _remember_case("crystallizers", {"feed_rate": feed_rate, "feed_rate_unit": feed_rate_unit, "feed_solids_wt_pct": feed_solids, "mother_liquor_solids_wt_pct": mother_liquor_solids, "target_slurry_solids_wt_pct": slurry_solids, "circulation": circulation, "circulation_unit": circulation_unit, "working_volume": working_volume, "working_volume_unit": working_volume_unit, "operating_temperature_c": operating_temp}, result_dict)
 
 
 
@@ -331,49 +557,36 @@ def render_workbook_import() -> None:
     if not uploaded:
         st.info("Upload a workbook to inspect sheets, header candidates, classifications, and preview-normalized tables.")
         return
-
     suffix = Path(uploaded.name).suffix or ".xlsx"
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
             handle.write(uploaded.getbuffer())
             temp_path = Path(handle.name)
-
         inspection = inspect_workbook(temp_path)
         normalized = normalize_inspection(inspection)
         st.subheader("Workbook source")
         st.json(inspection.get("source", {}))
-
         sheets_df = pd.DataFrame(
-            [
-                {
-                    "sheet_name": sheet.get("sheet_name"),
-                    "max_row": sheet.get("max_row"),
-                    "max_column": sheet.get("max_column"),
-                    "hidden": sheet.get("hidden"),
-                    "freeze_panes": sheet.get("freeze_panes"),
-                    "formula_cells": sheet.get("formula_cell_count"),
-                }
-                for sheet in inspection.get("sheet_previews", [])
-            ]
+            [{
+                "sheet_name": sheet.get("sheet_name"),
+                "max_row": sheet.get("max_row"),
+                "max_column": sheet.get("max_column"),
+                "hidden": sheet.get("hidden"),
+                "freeze_panes": sheet.get("freeze_panes"),
+                "formula_cells": sheet.get("formula_cell_count"),
+            } for sheet in inspection.get("sheet_previews", [])]
         )
-        st.subheader("Sheet summary")
         st.dataframe(sheets_df, use_container_width=True)
-
-        st.subheader("Sheet previews")
         for sheet in inspection.get("sheet_previews", []):
             with st.expander(sheet.get("sheet_name", "Sheet")):
                 st.json(sheet)
-
-        st.subheader("Preview-normalized tables")
         if normalized:
             for table in normalized:
                 with st.expander(f"{table['sheet_name']} ({table['classification']})"):
                     st.json(table)
         else:
             st.info("No table-shaped normalized data was found in the sampled workbook rows.")
-
-        _remember_case("workbook-inspection", {"uploaded_filename": uploaded.name}, {"inspection": inspection, "normalized_tables": normalized})
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink()
@@ -390,15 +603,10 @@ def render_case_manager() -> None:
     else:
         st.info("Run a calculator page first to populate a case payload, or save a manual JSON case below.")
         default_name = "case"
-
     with st.form("save_case_form"):
         case_name = st.text_input("Case name", value=default_name)
         description = st.text_input("Description", value="")
-        manual_json = st.text_area(
-            "Manual JSON payload override (optional)",
-            value=json.dumps(latest, indent=2) if latest else "{}",
-            height=250,
-        )
+        manual_json = st.text_area("Manual JSON payload override (optional)", value=json.dumps(latest, indent=2) if latest else "{}", height=250)
         submitted = st.form_submit_button("Save case")
         if submitted:
             payload = json.loads(manual_json)
@@ -406,20 +614,34 @@ def render_case_manager() -> None:
                 payload["description"] = description
             path = CASE_STORE.save(case_name, payload)
             st.success(f"Saved case to {path}")
-
-    st.subheader("Saved cases")
     cases = CASE_STORE.list_cases()
     if cases:
         selected_name = st.selectbox("Select saved case", [case["name"] for case in cases])
-        selected_case = CASE_STORE.load(selected_name)
-        st.json(selected_case)
+        st.json(CASE_STORE.load(selected_name))
     else:
         st.info("No saved cases yet.")
 
 
+
+def render_roadmap() -> None:
+    st.header("Roadmap")
+    roadmap = [
+        {"priority": 1, "area": "Citric BPE", "next_step": "Refine >60 DS estimation with better literature or validated plant-derived benchmarks."},
+        {"priority": 2, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
+        {"priority": 3, "area": "Hydraulics", "next_step": "Add pump power, NPSH screen, and line sizing recommendations."},
+        {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
+        {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
+        {"priority": 6, "area": "Quick tools", "next_step": "Add tank volume, blend/dilution, brix/solids, and utility cost estimate tools."},
+    ]
+    st.dataframe(pd.DataFrame(roadmap), use_container_width=True)
+    st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")
+
+
 PAGES = {
     "Dashboard": render_dashboard,
+    "Roadmap": render_roadmap,
     "Quick Tools": render_quick_tools,
+    "Citric BPE": render_citric_bpe,
     "Hydraulics": render_hydraulics,
     "Steam Jets": render_steam_jets,
     "Steam & Utilities": render_steam,

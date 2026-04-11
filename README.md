@@ -7,6 +7,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - evaporator operating screens
 - crystallizer operating screens
 - workbook inspection and curve ingestion scaffolding
+- citric-acid BPE screening including >60 DS estimate mode
 - case save/load workflows
 
 ## Current stack
@@ -55,11 +56,20 @@ Default URL:
 
 ## Working browser sections
 - Dashboard
+- Roadmap
+- Citric BPE
+  - workbook-table interpolation through 60 wt% DS
+  - workbook-derived >60 DS screening estimate with warnings
+  - BPE-driven capacity-impact screen
+  - visible in-app priority list for next improvements
+  - aligned with the hourly review loop
 - Quick Tools
   - pressure conversion
   - temperature conversion
   - BPE-aware thermal point
   - flash steam estimate
+  - product-specific solution properties for citric acid, fructose, dextrose, and sucrose syrups/solutions
+  - dilution water balance for syrup and liquor blend-back work
 - Hydraulics
   - velocity
   - Reynolds number
@@ -79,6 +89,7 @@ Default URL:
   - feed/product/evaporation rate
   - boiling and condensing temperature screen
   - steam demand and steam economy
+  - optional product-based BPE auto-fill for citric acid, fructose, dextrose, and sucrose liquors
 - Crystallizers
   - crystal yield estimate
   - slurry and mother liquor estimate
@@ -95,5 +106,5 @@ Default URL:
 ## Notes
 - The current tools are engineering screens, not rigorous design models.
 - Pressure is handled internally on an absolute kPa basis.
-- Per-input unit selectors are built into the browser shell.
+- The engineering calculator pages now expose selectable units on inputs and displayed outputs.
 - Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.

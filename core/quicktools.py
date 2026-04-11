@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from engineering_app.core.hydraulics import calculate_hydraulics_with_units
+from engineering_app.core.solutions import calculate_dilution_water, estimate_solution_properties
 from engineering_app.core.steam import duty_from_steam_flow, flash_steam_fraction, steam_flow_for_duty_kw
 from engineering_app.core.thermal import build_thermal_point
 from engineering_app.core.units import (
@@ -45,6 +46,22 @@ def flash_fraction(condensate_temp_c: float, flash_pressure_value: float, flash_
     return flash_steam_fraction(condensate_temp_c, flash_pressure_value, flash_pressure_unit, condensate_flow_kg_h)
 
 
+def solution_properties(
+    product: str,
+    solids_wt_pct: float,
+    temperature_c: float,
+    pressure_value: float,
+    pressure_unit: str,
+    flow_value: float | None = None,
+    flow_unit: str = "kg/h",
+):
+    return estimate_solution_properties(product, solids_wt_pct, temperature_c, pressure_value, pressure_unit, flow_value, flow_unit)
+
+
+def dilution_water(product: str, feed_rate_value: float, feed_rate_unit: str, feed_solids_wt_pct: float, target_solids_wt_pct: float):
+    return calculate_dilution_water(product, feed_rate_value, feed_rate_unit, feed_solids_wt_pct, target_solids_wt_pct)
+
+
 __all__ = [
     "pressure_conversion",
     "thermal_point",
@@ -53,6 +70,8 @@ __all__ = [
     "steam_for_duty",
     "duty_from_steam",
     "flash_fraction",
+    "solution_properties",
+    "dilution_water",
     "c_to_f",
     "f_to_c",
     "kg_h_to_mass_flow",

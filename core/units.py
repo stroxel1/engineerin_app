@@ -36,10 +36,17 @@ PRESSURE_UNITS = (
     "microns",
 )
 TEMPERATURE_UNITS = ("C", "F")
+DELTA_TEMPERATURE_UNITS = ("C", "F")
 MASS_FLOW_UNITS = ("kg/h", "lb/h", "kg/min", "t/h")
 VOLUMETRIC_FLOW_UNITS = ("m3/h", "m3/min", "gpm", "L/min")
 LENGTH_UNITS = ("m", "ft", "mm", "in")
 VOLUME_UNITS = ("m3", "L", "gal", "ft3")
+DENSITY_UNITS = ("kg/m3", "lb/ft3", "sg")
+VISCOSITY_UNITS = ("cP", "Pa·s")
+POWER_UNITS = ("kW", "BTU/h", "MMBTU/h")
+VELOCITY_UNITS = ("m/s", "ft/s")
+TIME_UNITS = ("s", "min", "h")
+PERCENT_UNITS = ("%", "fraction")
 
 
 def c_to_f(value_c: float) -> float:
@@ -48,6 +55,14 @@ def c_to_f(value_c: float) -> float:
 
 def f_to_c(value_f: float) -> float:
     return (value_f - 32.0) * 5.0 / 9.0
+
+
+def delta_c_to_f(value_c: float) -> float:
+    return value_c * 9.0 / 5.0
+
+
+def delta_f_to_c(value_f: float) -> float:
+    return value_f * 5.0 / 9.0
 
 
 def temperature_to_c(value: float, unit: str) -> float:
@@ -66,6 +81,24 @@ def c_to_temperature(value_c: float, unit: str) -> float:
     if u in {"f", "degf", "°f"}:
         return c_to_f(value_c)
     raise ValueError(f"Unsupported temperature unit: {unit}")
+
+
+def delta_temperature_to_c(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u in {"c", "degc", "°c"}:
+        return value
+    if u in {"f", "degf", "°f"}:
+        return delta_f_to_c(value)
+    raise ValueError(f"Unsupported delta-temperature unit: {unit}")
+
+
+def c_to_delta_temperature(value_c: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u in {"c", "degc", "°c"}:
+        return value_c
+    if u in {"f", "degf", "°f"}:
+        return delta_c_to_f(value_c)
+    raise ValueError(f"Unsupported delta-temperature unit: {unit}")
 
 
 def pressure_to_kpa_abs(value: float, unit: str) -> float:
@@ -240,3 +273,114 @@ def m3_to_volume(value_m3: float, unit: str) -> float:
     if u in {"ft3", "ft^3"}:
         return value_m3 / 0.028316846592
     raise ValueError(f"Unsupported volume unit: {unit}")
+
+
+def density_to_kg_m3(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u in {"kg/m3", "kg/m^3"}:
+        return value
+    if u in {"lb/ft3", "lb/ft^3"}:
+        return value * 16.01846337
+    if u == "sg":
+        return value * 1000.0
+    raise ValueError(f"Unsupported density unit: {unit}")
+
+
+def kg_m3_to_density(value_kg_m3: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u in {"kg/m3", "kg/m^3"}:
+        return value_kg_m3
+    if u in {"lb/ft3", "lb/ft^3"}:
+        return value_kg_m3 / 16.01846337
+    if u == "sg":
+        return value_kg_m3 / 1000.0
+    raise ValueError(f"Unsupported density unit: {unit}")
+
+
+def viscosity_to_cp(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "cp":
+        return value
+    if u in {"pa·s", "pa*s", "pas"}:
+        return value * 1000.0
+    raise ValueError(f"Unsupported viscosity unit: {unit}")
+
+
+def cp_to_viscosity(value_cp: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "cp":
+        return value_cp
+    if u in {"pa·s", "pa*s", "pas"}:
+        return value_cp / 1000.0
+    raise ValueError(f"Unsupported viscosity unit: {unit}")
+
+
+def kw_to_power(value_kw: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "kw":
+        return value_kw
+    if u in {"btu/h", "btu/hr"}:
+        return value_kw * 3412.141633
+    if u == "mmbtu/h":
+        return value_kw * 0.003412141633
+    raise ValueError(f"Unsupported power unit: {unit}")
+
+
+def power_to_kw(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "kw":
+        return value
+    if u in {"btu/h", "btu/hr"}:
+        return value / 3412.141633
+    if u == "mmbtu/h":
+        return value / 0.003412141633
+    raise ValueError(f"Unsupported power unit: {unit}")
+
+
+def m_s_to_velocity(value_m_s: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "m/s":
+        return value_m_s
+    if u == "ft/s":
+        return value_m_s / 0.3048
+    raise ValueError(f"Unsupported velocity unit: {unit}")
+
+
+def velocity_to_m_s(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "m/s":
+        return value
+    if u == "ft/s":
+        return value * 0.3048
+    raise ValueError(f"Unsupported velocity unit: {unit}")
+
+
+def seconds_to_time(value_s: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "s":
+        return value_s
+    if u == "min":
+        return value_s / 60.0
+    if u == "h":
+        return value_s / 3600.0
+    raise ValueError(f"Unsupported time unit: {unit}")
+
+
+def time_to_seconds(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "s":
+        return value
+    if u == "min":
+        return value * 60.0
+    if u == "h":
+        return value * 3600.0
+    raise ValueError(f"Unsupported time unit: {unit}")
+
+
+def fraction_to_percent(value_fraction: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "%":
+        return value_fraction * 100.0
+    if u == "fraction":
+        return value_fraction
+    raise ValueError(f"Unsupported percent unit: {unit}")
