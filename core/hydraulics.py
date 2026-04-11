@@ -160,6 +160,8 @@ class ParallelBranchResult:
     total_dynamic_head_m: float
     velocity_m_s: float
     percent_of_total_flow: float
+    head_error_m: float | None
+    balancing_loss_m: float | None
     notes: list[str]
 
 
@@ -170,6 +172,8 @@ class ParallelBranchBalanceResult:
     max_branch_head_m: float
     min_branch_head_m: float
     head_spread_m: float
+    common_branch_head_m: float | None
+    mode: str
     notes: list[str]
 
 
@@ -571,60 +575,225 @@ def calculate_vessel_static_head(
     )
 
 
+def _calculate_branch_result(
+    branch: PipeSegment,
+    flow_m3_h: float,
+    density_kg_m3: float,
+    viscosity_cp: float,
+):
+    if flow_m3_h <= 0.0:
+        return HydraulicResult(
+            velocity_m_s=0.0,
+            reynolds_number=0.0,
+            friction_factor=0.0,
+            pressure_drop_kpa=0.0,
+            head_loss_m=0.0,
+            total_dynamic_head_m=branch.elevation_change_m,
+            residence_time_s=float("inf"),
+            line_volume_m3=(math.pi * ((branch.pipe_id_mm / 1000.0) ** 2) / 4.0) * branch.pipe_length_m,
+            straight_loss_m=0.0,
+            fitting_loss_m=0.0,
+            notes=["No branch flow solved; total branch head is just the elevation term at zero flow."],
+        )
+    return calculate_hydraulics(
+        HydraulicInputs(
+            volumetric_flow_m3_h=flow_m3_h,
+            density_kg_m3=density_kg_m3,
+            viscosity_cp=viscosity_cp,
+            pipe_id_mm=branch.pipe_id_mm,
+            pipe_length_m=branch.pipe_length_m,
+            roughness_mm=branch.roughness_mm,
+            elevation_change_m=branch.elevation_change_m,
+            fitting_k_total=branch.fitting_k_total,
+        )
+    )
+
+
+def _solve_branch_flow_for_head(
+    branch: PipeSegment,
+    target_head_m: float,
+    density_kg_m3: float,
+    viscosity_cp: float,
+) -> tuple[float, HydraulicResult]:
+    zero_flow_head_m = branch.elevation_change_m
+    if target_head_m <= zero_flow_head_m:
+        zero_result = _calculate_branch_result(branch, 0.0, density_kg_m3, viscosity_cp)
+        return 0.0, zero_result
+
+    low_flow = 0.0
+    high_flow = 1.0
+    high_result = _calculate_branch_result(branch, high_flow, density_kg_m3, viscosity_cp)
+    while high_result.total_dynamic_head_m < target_head_m:
+        high_flow *= 2.0
+        if high_flow > 1.0e6:
+            raise ValueError(f"Could not bracket a balanced flow for branch {branch.name}.")
+        high_result = _calculate_branch_result(branch, high_flow, density_kg_m3, viscosity_cp)
+
+    best_flow = high_flow
+    best_result = high_result
+    for _ in range(60):
+        mid_flow = 0.5 * (low_flow + high_flow)
+        mid_result = _calculate_branch_result(branch, mid_flow, density_kg_m3, viscosity_cp)
+        if abs(mid_result.total_dynamic_head_m - target_head_m) < 1.0e-5:
+            return mid_flow, mid_result
+        if mid_result.total_dynamic_head_m < target_head_m:
+            low_flow = mid_flow
+        else:
+            high_flow = mid_flow
+            best_flow = mid_flow
+            best_result = mid_result
+    return best_flow, best_result
+
+
+def _build_parallel_branch_result(
+    branch: PipeSegment,
+    branch_flow_m3_h: float,
+    hydraulic_result: HydraulicResult,
+    total_flow_m3_h: float,
+    common_branch_head_m: float | None,
+) -> ParallelBranchResult:
+    head_error_m = None
+    if common_branch_head_m is not None and branch_flow_m3_h > 1.0e-9:
+        head_error_m = hydraulic_result.total_dynamic_head_m - common_branch_head_m
+    balancing_loss_m = None
+    if common_branch_head_m is not None and head_error_m is not None and head_error_m < 0.0:
+        balancing_loss_m = abs(head_error_m)
+    notes = list(hydraulic_result.notes)
+    if balancing_loss_m is not None and balancing_loss_m > 0.05:
+        notes.append(
+            f"This branch would need about {balancing_loss_m:.2f} m of extra throttling/orifice loss to match the common parallel-branch head."
+        )
+    return ParallelBranchResult(
+        name=branch.name,
+        flow_m3_h=branch_flow_m3_h,
+        pressure_drop_kpa=hydraulic_result.pressure_drop_kpa,
+        total_dynamic_head_m=hydraulic_result.total_dynamic_head_m,
+        velocity_m_s=hydraulic_result.velocity_m_s,
+        percent_of_total_flow=100.0 * branch_flow_m3_h / max(total_flow_m3_h, 1e-9),
+        head_error_m=head_error_m,
+        balancing_loss_m=balancing_loss_m,
+        notes=notes,
+    )
+
+
 def analyze_parallel_branches(
     total_flow_m3_h: float,
     density_kg_m3: float,
     viscosity_cp: float,
     branches: list[PipeSegment],
-    branch_split_fractions: list[float],
+    branch_split_fractions: list[float] | None = None,
+    mode: str = "entered_split",
 ) -> ParallelBranchBalanceResult:
-    if len(branches) != len(branch_split_fractions):
-        raise ValueError("Branch list and split fractions must be the same length.")
-    total_fraction = sum(branch_split_fractions)
-    if total_fraction <= 0:
-        raise ValueError("Total branch split fraction must be positive.")
+    if not branches:
+        raise ValueError("At least one branch is required.")
+    if total_flow_m3_h < 0.0:
+        raise ValueError("Total flow must be zero or greater.")
+    if mode not in {"entered_split", "self_balancing"}:
+        raise ValueError("Mode must be 'entered_split' or 'self_balancing'.")
+
     branch_results: list[ParallelBranchResult] = []
-    notes: list[str] = ["Parallel-branch screen assumes the entered split fractions are the actual flow split."]
+    notes: list[str] = []
     head_values: list[float] = []
-    for branch, fraction in zip(branches, branch_split_fractions):
-        branch_flow = total_flow_m3_h * fraction / total_fraction
-        result = calculate_hydraulics(
-            HydraulicInputs(
-                volumetric_flow_m3_h=branch_flow,
-                density_kg_m3=density_kg_m3,
-                viscosity_cp=viscosity_cp,
-                pipe_id_mm=branch.pipe_id_mm,
-                pipe_length_m=branch.pipe_length_m,
-                roughness_mm=branch.roughness_mm,
-                elevation_change_m=branch.elevation_change_m,
-                fitting_k_total=branch.fitting_k_total,
+
+    if mode == "entered_split":
+        if branch_split_fractions is None:
+            raise ValueError("Branch split fractions are required for entered_split mode.")
+        if len(branches) != len(branch_split_fractions):
+            raise ValueError("Branch list and split fractions must be the same length.")
+        total_fraction = sum(branch_split_fractions)
+        if total_fraction <= 0:
+            raise ValueError("Total branch split fraction must be positive.")
+        notes.append("Parallel-branch screen assumes the entered split fractions are the actual flow split.")
+        common_head_m = None
+        for branch, fraction in zip(branches, branch_split_fractions):
+            branch_flow = total_flow_m3_h * fraction / total_fraction
+            result = _calculate_branch_result(branch, branch_flow, density_kg_m3, viscosity_cp)
+            head_values.append(result.total_dynamic_head_m)
+            branch_results.append(
+                _build_parallel_branch_result(
+                    branch=branch,
+                    branch_flow_m3_h=branch_flow,
+                    hydraulic_result=result,
+                    total_flow_m3_h=total_flow_m3_h,
+                    common_branch_head_m=common_head_m,
+                )
             )
-        )
-        head_values.append(result.total_dynamic_head_m)
-        branch_results.append(
-            ParallelBranchResult(
-                name=branch.name,
-                flow_m3_h=branch_flow,
-                pressure_drop_kpa=result.pressure_drop_kpa,
-                total_dynamic_head_m=result.total_dynamic_head_m,
-                velocity_m_s=result.velocity_m_s,
-                percent_of_total_flow=100.0 * branch_flow / max(total_flow_m3_h, 1e-9),
-                notes=result.notes,
+    else:
+        min_common_head_m = min(branch.elevation_change_m for branch in branches)
+        low_head = min_common_head_m
+        high_head = max(max(branch.elevation_change_m for branch in branches) + 1.0, 1.0)
+
+        def total_flow_at_head(target_head_m: float) -> tuple[float, list[tuple[float, HydraulicResult]]]:
+            solved: list[tuple[float, HydraulicResult]] = []
+            total = 0.0
+            for branch in branches:
+                branch_flow, branch_result = _solve_branch_flow_for_head(branch, target_head_m, density_kg_m3, viscosity_cp)
+                solved.append((branch_flow, branch_result))
+                total += branch_flow
+            return total, solved
+
+        total_at_high, solved_high = total_flow_at_head(high_head)
+        while total_at_high < total_flow_m3_h:
+            high_head *= 2.0
+            if high_head > 1.0e6:
+                raise ValueError("Could not bracket a common branch head for the requested total flow.")
+            total_at_high, solved_high = total_flow_at_head(high_head)
+
+        common_head_m = high_head
+        solved_branches = solved_high
+        for _ in range(60):
+            mid_head = 0.5 * (low_head + high_head)
+            total_at_mid, solved_mid = total_flow_at_head(mid_head)
+            if abs(total_at_mid - total_flow_m3_h) < max(total_flow_m3_h, 1.0) * 1.0e-6:
+                common_head_m = mid_head
+                solved_branches = solved_mid
+                break
+            if total_at_mid < total_flow_m3_h:
+                low_head = mid_head
+            else:
+                high_head = mid_head
+                common_head_m = mid_head
+                solved_branches = solved_mid
+
+        notes.append("Self-balancing mode solves for the common branch head where all open parallel branches see the same TDH and the solved branch flows add up to the entered total flow.")
+        notes.append("Use this to estimate the natural flow split before adding manual throttling, control valves, or orifice plates.")
+        inactive_branch_count = 0
+        for branch, (branch_flow, result) in zip(branches, solved_branches):
+            if branch_flow > 1.0e-9:
+                head_values.append(result.total_dynamic_head_m)
+            else:
+                inactive_branch_count += 1
+            branch_results.append(
+                _build_parallel_branch_result(
+                    branch=branch,
+                    branch_flow_m3_h=branch_flow,
+                    hydraulic_result=result,
+                    total_flow_m3_h=total_flow_m3_h,
+                    common_branch_head_m=common_head_m,
+                )
             )
-        )
+        if inactive_branch_count:
+            notes.append(f"{inactive_branch_count} branch(es) stayed effectively shut in the self-balancing solution because their static/elevation requirement was too high for the solved common head.")
+
     max_head = max(head_values)
     min_head = min(head_values)
     spread = max_head - min_head
-    if spread > 2.0:
-        notes.append("Parallel branch head spread is large; the entered split likely will not self-balance without throttling/orifices/control valves.")
+    if mode == "entered_split":
+        if spread > 2.0:
+            notes.append("Parallel branch head spread is large; the entered split likely will not self-balance without throttling/orifices/control valves.")
+        else:
+            notes.append("Parallel branch head spread is relatively tight for a first-pass balance screen.")
     else:
-        notes.append("Parallel branch head spread is relatively tight for a first-pass balance screen.")
+        notes.append("Head spread should be near zero in self-balancing mode; any small remainder is from solver tolerance.")
+
     return ParallelBranchBalanceResult(
         branches=branch_results,
         total_flow_m3_h=total_flow_m3_h,
         max_branch_head_m=max_head,
         min_branch_head_m=min_head,
         head_spread_m=spread,
+        common_branch_head_m=common_head_m,
+        mode=mode,
         notes=notes,
     )
 

@@ -74,6 +74,7 @@ from engineering_app.core.units import (
     m3_to_volume,
     m_s_to_velocity,
     m_to_length,
+    length_to_m,
     seconds_to_time,
 )
 from engineering_app.io.normalizers import normalize_inspection
@@ -790,7 +791,14 @@ def render_hydraulics() -> None:
         st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
         _show_notes(seg_result.notes)
     with tabs[4]:
-        st.caption("Estimate pressure-balance mismatch across up to three parallel branches using the entered split fractions.")
+        st.caption("Check whether a parallel network will naturally self-balance or whether the entered split requires throttling/orifice loss to hold the intended branch flows.")
+        branch_mode = st.radio(
+            "Parallel branch mode",
+            ("entered_split", "self_balancing"),
+            format_func=lambda mode: "Entered split check" if mode == "entered_split" else "Self-balancing estimate",
+            horizontal=True,
+            key="hyd_parallel_mode",
+        )
         branch_defaults = [
             ("Branch A", 54.8, 30.0, 0.0, 4.0, 0.40),
             ("Branch B", 54.8, 45.0, 2.0, 6.0, 0.35),
@@ -806,18 +814,61 @@ def render_hydraulics() -> None:
             branch_len = b3.number_input("Length (m)", value=length_m, key=f"hyd_branch_len_{idx}")
             branch_elev = b4.number_input("Elevation change (m)", value=elev_m, key=f"hyd_branch_elev_{idx}")
             branch_k = b5.number_input("Total K", value=k_total, key=f"hyd_branch_k_{idx}")
-            branch_split = b6.number_input("Flow split fraction", min_value=0.0, value=split, key=f"hyd_branch_split_{idx}")
+            branch_split = b6.number_input(
+                "Flow split fraction",
+                min_value=0.0,
+                value=split,
+                key=f"hyd_branch_split_{idx}",
+                disabled=branch_mode == "self_balancing",
+            )
             branches.append(PipeSegment(branch_name, branch_id, branch_len, roughness_mm, branch_elev, branch_k))
             fractions.append(branch_split)
+        total_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         branch_result = analyze_parallel_branches(
-            total_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+            total_flow_m3_h=total_flow_m3_h,
             density_kg_m3=density_kg_m3,
             viscosity_cp=viscosity_cp,
             branches=branches,
             branch_split_fractions=fractions,
+            mode=branch_mode,
         )
-        st.metric("Branch head spread", f"{branch_result.head_spread_m:,.2f} m")
-        st.dataframe(pd.DataFrame([asdict(branch) for branch in branch_result.branches]), use_container_width=True)
+        st.metric("Branch head spread", f"{branch_result.head_spread_m:,.4f} m")
+        if branch_result.common_branch_head_m is not None:
+            st.metric("Common balanced head", f"{branch_result.common_branch_head_m:,.3f} m")
+        branch_df = pd.DataFrame([
+            {
+                "Branch": branch.name,
+                f"Flow ({flow_unit})": m3_h_to_volumetric_flow(branch.flow_m3_h, flow_unit),
+                "% of total flow": branch.percent_of_total_flow,
+                f"ΔP ({dp_unit})": _pressure_delta_from_kpa(branch.pressure_drop_kpa, dp_unit),
+                f"TDH ({head_unit})": m_to_length(branch.total_dynamic_head_m, head_unit),
+                f"Velocity ({velocity_unit})": m_s_to_velocity(branch.velocity_m_s, velocity_unit),
+                f"Head error ({head_unit})": m_to_length(branch.head_error_m, head_unit) if branch.head_error_m is not None else None,
+                f"Needed extra loss ({head_unit})": m_to_length(branch.balancing_loss_m, head_unit) if branch.balancing_loss_m is not None else None,
+            }
+            for branch in branch_result.branches
+        ])
+        st.dataframe(branch_df, use_container_width=True)
+        if branch_mode == "entered_split":
+            self_balancing_result = analyze_parallel_branches(
+                total_flow_m3_h=total_flow_m3_h,
+                density_kg_m3=density_kg_m3,
+                viscosity_cp=viscosity_cp,
+                branches=branches,
+                mode="self_balancing",
+            )
+            st.caption("Natural self-balancing comparison for the same hardware and total flow")
+            self_balancing_df = pd.DataFrame([
+                {
+                    "Branch": branch.name,
+                    f"Balanced flow ({flow_unit})": m3_h_to_volumetric_flow(branch.flow_m3_h, flow_unit),
+                    "% of total flow": branch.percent_of_total_flow,
+                    f"TDH ({head_unit})": m_to_length(branch.total_dynamic_head_m, head_unit),
+                }
+                for branch in self_balancing_result.branches
+            ])
+            st.dataframe(self_balancing_df, use_container_width=True)
+            _show_notes(self_balancing_result.notes)
         _show_notes(branch_result.notes)
 
     with tabs[5]:

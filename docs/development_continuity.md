@@ -35,6 +35,8 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - pump/system curve overlay
 10. Hydraulics page bottom rendering error fixed (local pandas import shadowing `pd`)
 11. Quick tools expanded with blend, brix reconciliation, and tank inventory helpers.
+12. Hydraulics expanded further with parallel branch balancing and vessel/static-head screens.
+13. Parallel hydraulics now supports both entered-split checking and a self-balancing flow solver with branch throttling-loss estimates.
 
 ## Recent git commits
 - `7af1d88` Fix hydraulics page bottom rendering error
@@ -60,9 +62,9 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 
 ## Next high-value work items
 1. Hydraulics
-   - branch / parallel network balancing improvements beyond fixed split entry
    - suction/discharge vessel modeling refinement
-   - possibly pump curve libraries or upload-based pump curves
+   - pump curve libraries or upload-based pump curves matched against system curves
+   - optional balancing-valve/orifice coefficient sizing from the new self-balancing branch results
 2. Evaporators
    - design-calibrated evaporator mode from workbook logic
 3. Steam jets

@@ -88,7 +88,8 @@ Default URL:
   - pump hydraulic/brake power
   - NPSHa screening
   - segmented suction/discharge system breakdowns
-  - parallel branch balancing screen
+  - parallel branch entered-split check with branch head mismatch / throttling-loss estimate
+  - self-balancing parallel branch flow solver for natural split screening
   - vessel/static-head screen
   - control-valve Cv/Kv sizing
   - pump vs system curve overlay
@@ -127,3 +128,4 @@ Default URL:
 - Pressure is handled internally on an absolute kPa basis.
 - The engineering calculator pages now expose selectable units on inputs and displayed outputs.
 - Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.
+- Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.
