@@ -17,10 +17,12 @@ from engineering_app.core.curves import evaluate_operating_point, make_curve_fro
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
 from engineering_app.core.hydraulics import (
     PipeSegment,
+    analyze_parallel_branches,
     build_system_curve,
     calculate_hydraulics_with_units,
     calculate_pump_power,
     calculate_segmented_system,
+    calculate_vessel_static_head,
     compare_schedule_10s_sizes,
     estimate_npsha,
     find_pump_system_intersection,
@@ -31,6 +33,7 @@ from engineering_app.core.hydraulics import (
 
 from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
 from engineering_app.core.quicktools import (
+    brix_reconciliation,
     dilution_water,
     flash_fraction,
     pressure_conversion,
@@ -145,7 +148,7 @@ def render_dashboard() -> None:
 
 def render_quick_tools() -> None:
     st.header("Quick Tools")
-    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Dilution", "Two-Stream Blend", "Tank Inventory"])
+    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Tank Inventory"])
     product_options = list(PRODUCT_PROFILES.keys())
     product_labels = {key: PRODUCT_PROFILES[key].display_name for key in product_options}
 
@@ -234,6 +237,105 @@ def render_quick_tools() -> None:
         _show_notes(result.notes)
 
     with tabs[5]:
+        st.caption("Reconcile field refractometer °Bx against lab solids and/or density so dilution, evaporator, and inventory screens use a product-calibrated dissolved-solids basis.")
+        c1, c2, c3, c4 = st.columns(4)
+        product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_brix_product")
+        observed_brix = c2.number_input("Observed refractometer reading (°Bx)", min_value=0.0, max_value=95.0, value=62.5, key="qt_brix_observed")
+        temperature_value = c3.number_input("Sample temperature", value=25.0, key="qt_brix_temp")
+        temperature_unit = c4.selectbox("Sample temperature unit", TEMPERATURE_UNITS, index=0, key="qt_brix_temp_unit")
+
+        d1, d2, d3, d4 = st.columns(4)
+        pressure_value = d1.number_input("Screen pressure", value=20.0, key="qt_brix_pressure")
+        pressure_unit = d2.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="qt_brix_pressure_unit")
+        flow_value = d3.number_input("Optional process flow", min_value=0.0, value=12000.0, key="qt_brix_flow")
+        flow_unit = d4.selectbox("Flow unit", MASS_FLOW_UNITS, index=0, key="qt_brix_flow_unit")
+
+        e1, e2, e3, e4 = st.columns(4)
+        use_lab_reference = e1.checkbox("Use lab solids reference", value=True, key="qt_brix_use_lab")
+        lab_solids_wt_pct = e2.number_input("Lab dissolved solids (wt%)", min_value=0.0, max_value=95.0, value=60.8, disabled=not use_lab_reference, key="qt_brix_lab_solids")
+        use_density_reference = e3.checkbox("Use density reference", value=True, key="qt_brix_use_density")
+        density_value = e4.number_input("Measured density", min_value=0.0, value=1305.0, disabled=not use_density_reference, key="qt_brix_density")
+
+        f1, f2, f3, f4, f5 = st.columns(5)
+        density_input_unit = f1.selectbox("Density input unit", DENSITY_UNITS, index=0, key="qt_brix_density_unit")
+        solids_output_unit = f2.selectbox("Solids output unit", PERCENT_UNITS, index=0, key="qt_brix_solids_out")
+        density_output_unit = f3.selectbox("Density output unit", DENSITY_UNITS, index=0, key="qt_brix_density_out")
+        bpe_output_unit = f4.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="qt_brix_bpe_out")
+        viscosity_output_unit = f5.selectbox("Viscosity output unit", VISCOSITY_UNITS, index=0, key="qt_brix_visc_out")
+        output_temp_unit = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="qt_brix_temp_out")
+
+        try:
+            temperature_c = temperature_to_c(temperature_value, temperature_unit)
+            result = brix_reconciliation(
+                product=product,
+                observed_brix=observed_brix,
+                temperature_c=temperature_c,
+                pressure_value=pressure_value,
+                pressure_unit=pressure_unit,
+                lab_solids_wt_pct=lab_solids_wt_pct if use_lab_reference else None,
+                measured_density_value=density_value if use_density_reference else None,
+                measured_density_unit=density_input_unit,
+                flow_value=flow_value if flow_value > 0 else None,
+                flow_unit=flow_unit,
+            )
+            m1, m2, m3, m4 = st.columns(4)
+            corrected_display = _display_percent(result.corrected_solids_wt_pct / 100.0, solids_output_unit)
+            reference_display = (
+                _display_percent(result.reference_solids_wt_pct / 100.0, solids_output_unit)
+                if result.reference_solids_wt_pct is not None
+                else None
+            )
+            density_implied_display = (
+                _display_percent(result.density_implied_solids_wt_pct / 100.0, solids_output_unit)
+                if result.density_implied_solids_wt_pct is not None
+                else None
+            )
+            solids_unit_label = "wt%" if solids_output_unit == "%" else "fraction"
+            m1.metric("Corrected solids", f"{corrected_display:,.3f} {solids_unit_label}")
+            m2.metric("Reference solids", f"{reference_display:,.3f} {solids_unit_label}" if reference_display is not None else "Not entered")
+            m3.metric("Brix offset", f"{result.brix_offset_deg_bx:+.3f} °Bx" if result.brix_offset_deg_bx is not None else "No correction")
+            m4.metric("Brix factor", f"{result.brix_factor:,.4f}" if result.brix_factor is not None else "No correction")
+
+            n1, n2, n3, n4 = st.columns(4)
+            n1.metric("Density-implied solids", f"{density_implied_display:,.3f} {solids_unit_label}" if density_implied_display is not None else "Not entered")
+            n2.metric("Expected density", f"{kg_m3_to_density(result.expected_density_kg_m3, density_output_unit):,.3f} {density_output_unit}")
+            n3.metric("Estimated BPE", f"{_display_delta_t(result.estimated_bpe_c, bpe_output_unit):,.2f} °{bpe_output_unit}")
+            n4.metric("Estimated viscosity", f"{cp_to_viscosity(result.estimated_viscosity_cp, viscosity_output_unit):,.3f} {viscosity_output_unit}")
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Observed minus reference", f"{result.solids_error_wt_pct:+.2f} wt%" if result.solids_error_wt_pct is not None else "No correction")
+            p2.metric("Boiling point", f"{_display_temperature(result.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+            if result.dissolved_solids_kg_h is not None and result.water_kg_h is not None:
+                p3.metric("Dissolved solids flow", f"{kg_h_to_mass_flow(result.dissolved_solids_kg_h, flow_unit):,.1f} {flow_unit}")
+                st.metric("Water flow", f"{kg_h_to_mass_flow(result.water_kg_h, flow_unit):,.1f} {flow_unit}")
+            else:
+                p3.metric("Dissolved solids flow", "Flow not entered")
+
+            st.json(asdict(result))
+            _show_notes(result.notes)
+            _remember_case(
+                "quick-tools-brix-reconciliation",
+                {
+                    "product": product,
+                    "observed_brix": observed_brix,
+                    "temperature_value": temperature_value,
+                    "temperature_unit": temperature_unit,
+                    "pressure_value": pressure_value,
+                    "pressure_unit": pressure_unit,
+                    "flow_value": flow_value,
+                    "flow_unit": flow_unit,
+                    "use_lab_reference": use_lab_reference,
+                    "lab_solids_wt_pct": lab_solids_wt_pct if use_lab_reference else None,
+                    "use_density_reference": use_density_reference,
+                    "density_value": density_value if use_density_reference else None,
+                    "density_unit": density_input_unit,
+                },
+                asdict(result),
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[6]:
         c1, c2, c3 = st.columns(3)
         product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_dilution_product")
         feed_rate_value = c2.number_input("Feed flow", min_value=0.0, value=10000.0, key="qt_dilution_flow")
@@ -253,7 +355,7 @@ def render_quick_tools() -> None:
         except ValueError as exc:
             st.error(str(exc))
 
-    with tabs[6]:
+    with tabs[7]:
         st.caption("Blend two liquor, syrup, water, or condensate streams on a dissolved-solids basis and screen the resulting mixed properties.")
         c1, c2 = st.columns(2)
         product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_blend_product")
@@ -346,7 +448,7 @@ def render_quick_tools() -> None:
         except ValueError as exc:
             st.error(str(exc))
 
-    with tabs[7]:
+    with tabs[8]:
         c1, c2, c3 = st.columns(3)
         tank_type = c1.selectbox(
             "Tank type",
@@ -529,7 +631,7 @@ def render_solution_bpe() -> None:
 def render_hydraulics() -> None:
     st.header("Hydraulics")
     st.caption("Sized for plant line studies with stainless schedule 10S presets, fittings, TDH, pump power, NPSHa, segmented systems, and control-valve sizing.")
-    tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system", "Control valve", "Pump/System curve"])
+    tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system", "Parallel branches", "Vessel/static head", "Control valve", "Pump/System curve"])
 
     from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
 
@@ -687,6 +789,60 @@ def render_hydraulics() -> None:
         st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
         _show_notes(seg_result.notes)
     with tabs[4]:
+        st.caption("Estimate pressure-balance mismatch across up to three parallel branches using the entered split fractions.")
+        branch_defaults = [
+            ("Branch A", 54.8, 30.0, 0.0, 4.0, 0.40),
+            ("Branch B", 54.8, 45.0, 2.0, 6.0, 0.35),
+            ("Branch C", 54.8, 25.0, -1.0, 3.0, 0.25),
+        ]
+        branches = []
+        fractions = []
+        for idx, (name, id_mm, length_m, elev_m, k_total, split) in enumerate(branch_defaults, start=1):
+            st.markdown(f"Parallel branch {idx}")
+            b1, b2, b3, b4, b5, b6 = st.columns(6)
+            branch_name = b1.text_input("Name", value=name, key=f"hyd_branch_name_{idx}")
+            branch_id = b2.number_input("ID (mm)", value=id_mm, key=f"hyd_branch_id_{idx}")
+            branch_len = b3.number_input("Length (m)", value=length_m, key=f"hyd_branch_len_{idx}")
+            branch_elev = b4.number_input("Elevation change (m)", value=elev_m, key=f"hyd_branch_elev_{idx}")
+            branch_k = b5.number_input("Total K", value=k_total, key=f"hyd_branch_k_{idx}")
+            branch_split = b6.number_input("Flow split fraction", min_value=0.0, value=split, key=f"hyd_branch_split_{idx}")
+            branches.append(PipeSegment(branch_name, branch_id, branch_len, roughness_mm, branch_elev, branch_k))
+            fractions.append(branch_split)
+        branch_result = analyze_parallel_branches(
+            total_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+            density_kg_m3=density_kg_m3,
+            viscosity_cp=viscosity_cp,
+            branches=branches,
+            branch_split_fractions=fractions,
+        )
+        st.metric("Branch head spread", f"{branch_result.head_spread_m:,.2f} m")
+        st.dataframe(pd.DataFrame([asdict(branch) for branch in branch_result.branches]), use_container_width=True)
+        _show_notes(branch_result.notes)
+
+    with tabs[5]:
+        st.caption("Estimate vessel-derived static head from liquid level for tanks, feed vessels, or suction/discharge receivers.")
+        v1, v2, v3, v4, v5 = st.columns(5)
+        vessel_height = v1.number_input("Vessel straight-side height", min_value=0.1, value=6.0, key="hyd_vessel_height")
+        vessel_height_unit = v2.selectbox("Height unit", LENGTH_UNITS, index=0, key="hyd_vessel_height_unit")
+        vessel_diameter = v3.number_input("Vessel diameter", min_value=0.1, value=2.5, key="hyd_vessel_diameter")
+        vessel_diameter_unit = v4.selectbox("Diameter unit", LENGTH_UNITS, index=0, key="hyd_vessel_diameter_unit")
+        level_fraction = v5.number_input("Liquid level fraction", min_value=0.0, value=0.65, key="hyd_vessel_level_fraction")
+        head_unit = st.selectbox("Vessel head output unit", LENGTH_UNITS, index=0, key="hyd_vessel_head_out")
+        volume_unit = st.selectbox("Vessel volume output unit", VOLUME_UNITS, index=0, key="hyd_vessel_vol_out")
+        vessel = calculate_vessel_static_head(
+            liquid_height_m=length_to_m(vessel_height, vessel_height_unit),
+            vessel_diameter_m=length_to_m(vessel_diameter, vessel_diameter_unit),
+            density_kg_m3=density_kg_m3,
+            level_fraction=level_fraction,
+        )
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Static head", f"{m_to_length(vessel.static_head_m, head_unit):,.2f} {head_unit}")
+        m2.metric("Bottom pressure", f"{vessel.bottom_pressure_kpa_g:,.2f} kPag")
+        m3.metric("Liquid volume", f"{m3_to_volume(vessel.volume_m3, volume_unit):,.2f} {volume_unit}")
+        _show_notes(vessel.notes)
+        st.json(asdict(vessel))
+
+    with tabs[6]:
         st.caption("Screen liquid control-valve sizing from line flow, density, and target valve pressure drop, then add cavitation/flashing checks from inlet pressure, liquid temperature, and FL.")
         c1, c2, c3 = st.columns(3)
         valve_dp = c1.number_input("Target valve ΔP", min_value=0.01, value=max(result.pressure_drop_kpa * 0.35, 20.0), key="hyd_cv_dp")
@@ -743,7 +899,7 @@ def render_hydraulics() -> None:
         _show_notes(valve.notes)
         st.json(asdict(valve))
 
-    with tabs[5]:
+    with tabs[7]:
         st.caption("Overlay a simple pump curve against the estimated system curve to visualize the operating point.")
         p1, p2, p3 = st.columns(3)
         shutoff_head = p1.number_input("Pump shutoff head (m)", min_value=0.1, value=max(result.total_dynamic_head_m * 1.6, 20.0), key="hyd_curve_shutoff")
@@ -1278,7 +1434,7 @@ def render_roadmap() -> None:
         {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
-        {"priority": 6, "area": "Quick tools", "next_step": "Add brix/solids reconciliation and utility cost estimate tools, then extend blend workflows to ratio-target solving."},
+        {"priority": 6, "area": "Quick tools", "next_step": "Add utility cost estimate tools and ratio-target blend solving on top of the new Brix reconciliation screen."},
     ]
     st.dataframe(pd.DataFrame(roadmap), use_container_width=True)
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")

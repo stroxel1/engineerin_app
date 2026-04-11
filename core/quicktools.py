@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from engineering_app.core.hydraulics import calculate_hydraulics_with_units
-from engineering_app.core.solutions import calculate_dilution_water, calculate_two_stream_blend, estimate_solution_properties
+from engineering_app.core.solutions import (
+    calculate_brix_reconciliation,
+    calculate_dilution_water,
+    calculate_two_stream_blend,
+    estimate_solution_properties,
+)
 from engineering_app.core.steam import duty_from_steam_flow, flash_steam_fraction, steam_flow_for_duty_kw
 from engineering_app.core.tanks import estimate_tank_inventory_with_units
 from engineering_app.core.thermal import build_thermal_point
@@ -57,6 +62,32 @@ def solution_properties(
     flow_unit: str = "kg/h",
 ):
     return estimate_solution_properties(product, solids_wt_pct, temperature_c, pressure_value, pressure_unit, flow_value, flow_unit)
+
+
+def brix_reconciliation(
+    product: str,
+    observed_brix: float,
+    temperature_c: float,
+    pressure_value: float,
+    pressure_unit: str,
+    lab_solids_wt_pct: float | None = None,
+    measured_density_value: float | None = None,
+    measured_density_unit: str = "kg/m3",
+    flow_value: float | None = None,
+    flow_unit: str = "kg/h",
+):
+    return calculate_brix_reconciliation(
+        product=product,
+        observed_brix=observed_brix,
+        temperature_c=temperature_c,
+        pressure_value=pressure_value,
+        pressure_unit=pressure_unit,
+        lab_solids_wt_pct=lab_solids_wt_pct,
+        measured_density_value=measured_density_value,
+        measured_density_unit=measured_density_unit,
+        flow_value=flow_value,
+        flow_unit=flow_unit,
+    )
 
 
 def dilution_water(product: str, feed_rate_value: float, feed_rate_unit: str, feed_solids_wt_pct: float, target_solids_wt_pct: float):
@@ -120,6 +151,7 @@ __all__ = [
     "duty_from_steam",
     "flash_fraction",
     "solution_properties",
+    "brix_reconciliation",
     "dilution_water",
     "two_stream_blend",
     "tank_inventory",

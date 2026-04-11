@@ -8,10 +8,11 @@ handling, evaporator BPE screening, and blend-back dilution work.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import sqrt
 
 from engineering_app.core.citric_bpe import estimate_citric_bpe
 from engineering_app.core.thermal import build_thermal_point
-from engineering_app.core.units import mass_flow_to_kg_h
+from engineering_app.core.units import density_to_kg_m3, mass_flow_to_kg_h
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,29 @@ class TwoStreamBlendResult:
     stream_a_temperature_c: float | None
     stream_b_temperature_c: float | None
     blended_temperature_c: float | None
+    notes: list[str]
+
+
+@dataclass
+class BrixReconciliationResult:
+    product: str
+    observed_brix: float
+    corrected_solids_wt_pct: float
+    reference_solids_wt_pct: float | None
+    reference_source: str
+    lab_solids_wt_pct: float | None
+    measured_density_kg_m3: float | None
+    density_implied_solids_wt_pct: float | None
+    brix_offset_deg_bx: float | None
+    brix_factor: float | None
+    solids_error_wt_pct: float | None
+    expected_density_kg_m3: float
+    estimated_bpe_c: float
+    estimated_viscosity_cp: float
+    boiling_temperature_c: float
+    saturation_temperature_c: float
+    dissolved_solids_kg_h: float | None
+    water_kg_h: float | None
     notes: list[str]
 
 
@@ -154,6 +178,27 @@ def get_product_profile(product: str) -> ProductProfile:
         raise ValueError(f"Unsupported product: {product}") from exc
 
 
+def _estimate_density_kg_m3(profile: ProductProfile, solids_wt_pct: float, temperature_c: float) -> float:
+    density = (
+        998.0
+        + profile.density_linear_coeff * solids_wt_pct
+        + profile.density_quadratic_coeff * solids_wt_pct * solids_wt_pct
+        - profile.density_temp_coeff * max(temperature_c - 20.0, 0.0)
+    )
+    return max(density, 900.0)
+
+
+def _estimate_solids_from_density_kg_m3(profile: ProductProfile, density_kg_m3: float, temperature_c: float) -> float:
+    adjusted_density = density_kg_m3 - 998.0 + profile.density_temp_coeff * max(temperature_c - 20.0, 0.0)
+    a = profile.density_quadratic_coeff
+    b = profile.density_linear_coeff
+    if a <= 0.0:
+        return max(adjusted_density / max(b, 1e-9), 0.0)
+    discriminant = max(b * b + 4.0 * a * adjusted_density, 0.0)
+    solids = (-b + sqrt(discriminant)) / (2.0 * a)
+    return max(solids, 0.0)
+
+
 def estimate_solution_properties(
     product: str,
     solids_wt_pct: float,
@@ -165,13 +210,7 @@ def estimate_solution_properties(
 ) -> SolutionPropertyResult:
     profile = get_product_profile(product)
     solids = max(solids_wt_pct, 0.0)
-    density = (
-        998.0
-        + profile.density_linear_coeff * solids
-        + profile.density_quadratic_coeff * solids * solids
-        - profile.density_temp_coeff * max(temperature_c - 20.0, 0.0)
-    )
-    density = max(density, 900.0)
+    density = _estimate_density_kg_m3(profile, solids, temperature_c)
     if product == "citric_acid":
         citric_bpe = estimate_citric_bpe(solids, pressure_value, pressure_unit, method="auto")
         bpe_c = citric_bpe.bpe_c
@@ -213,6 +252,105 @@ def estimate_solution_properties(
         boiling_temperature_c=thermal_point.boiling_temperature_c,
         saturation_temperature_c=thermal_point.saturation_temperature_c,
         notes=notes,
+    )
+
+
+def calculate_brix_reconciliation(
+    product: str,
+    observed_brix: float,
+    temperature_c: float,
+    pressure_value: float,
+    pressure_unit: str,
+    lab_solids_wt_pct: float | None = None,
+    measured_density_value: float | None = None,
+    measured_density_unit: str = "kg/m3",
+    flow_value: float | None = None,
+    flow_unit: str = "kg/h",
+) -> BrixReconciliationResult:
+    profile = get_product_profile(product)
+    if observed_brix < 0.0:
+        raise ValueError("Observed Brix must be zero or greater.")
+    if lab_solids_wt_pct is not None and not 0.0 <= lab_solids_wt_pct <= 100.0:
+        raise ValueError("Lab solids must stay within 0 to 100 wt%.")
+
+    measured_density_kg_m3 = None
+    density_implied_solids_wt_pct = None
+    if measured_density_value is not None:
+        measured_density_kg_m3 = density_to_kg_m3(measured_density_value, measured_density_unit)
+        density_implied_solids_wt_pct = _estimate_solids_from_density_kg_m3(profile, measured_density_kg_m3, temperature_c)
+
+    reference_solids_wt_pct = None
+    reference_source = "uncorrected_brix"
+    if lab_solids_wt_pct is not None:
+        reference_solids_wt_pct = lab_solids_wt_pct
+        reference_source = "lab_solids"
+    elif density_implied_solids_wt_pct is not None:
+        reference_solids_wt_pct = density_implied_solids_wt_pct
+        reference_source = "density_model"
+
+    corrected_solids_wt_pct = reference_solids_wt_pct if reference_solids_wt_pct is not None else observed_brix
+    corrected_solids_wt_pct = max(min(corrected_solids_wt_pct, 100.0), 0.0)
+
+    properties = estimate_solution_properties(
+        product=product,
+        solids_wt_pct=corrected_solids_wt_pct,
+        temperature_c=temperature_c,
+        pressure_value=pressure_value,
+        pressure_unit=pressure_unit,
+        flow_value=flow_value,
+        flow_unit=flow_unit,
+    )
+
+    brix_offset = None if reference_solids_wt_pct is None else reference_solids_wt_pct - observed_brix
+    brix_factor = None
+    if reference_solids_wt_pct is not None and observed_brix > 0.0:
+        brix_factor = reference_solids_wt_pct / observed_brix
+
+    notes = [
+        f"°Bx is a sucrose-based dissolved-solids indication; for {profile.display_name}, use it as an approximate solids reading until it is checked against plant lab or density data.",
+        "Reference basis comes from the first trusted source available: lab solids first, then product-density back-calculation.",
+        "Use the suggested offset/factor to align field refractometer readings with the current product and temperature range.",
+    ]
+    if reference_source == "uncorrected_brix":
+        notes.append("No lab solids or density reference was entered, so corrected solids default to the observed Brix value.")
+    if density_implied_solids_wt_pct is not None:
+        notes.append("Density-implied solids come from the app's product density estimate and are intended for screening, not custody-transfer accuracy.")
+    if lab_solids_wt_pct is not None and density_implied_solids_wt_pct is not None:
+        gap = abs(lab_solids_wt_pct - density_implied_solids_wt_pct)
+        if gap > 1.0:
+            notes.append(
+                f"Lab solids and density-implied solids differ by {gap:.2f} wt%; verify sample temperature, entrained air, and density basis before using one calibration broadly."
+            )
+    solids_error = None if reference_solids_wt_pct is None else observed_brix - reference_solids_wt_pct
+    if solids_error is not None and abs(solids_error) > 1.0:
+        notes.append(
+            f"Observed Brix differs from the selected reference by {solids_error:+.2f} wt%; this is large enough to materially affect downstream dilution and evaporator screens."
+        )
+    if corrected_solids_wt_pct > profile.max_recommended_solids_wt_pct:
+        notes.append(
+            f"Corrected solids exceed the normal screening range for {profile.display_name}; expect larger error in the density and viscosity back-checks."
+        )
+
+    return BrixReconciliationResult(
+        product=product,
+        observed_brix=observed_brix,
+        corrected_solids_wt_pct=corrected_solids_wt_pct,
+        reference_solids_wt_pct=reference_solids_wt_pct,
+        reference_source=reference_source,
+        lab_solids_wt_pct=lab_solids_wt_pct,
+        measured_density_kg_m3=measured_density_kg_m3,
+        density_implied_solids_wt_pct=density_implied_solids_wt_pct,
+        brix_offset_deg_bx=brix_offset,
+        brix_factor=brix_factor,
+        solids_error_wt_pct=solids_error,
+        expected_density_kg_m3=properties.estimated_density_kg_m3,
+        estimated_bpe_c=properties.estimated_bpe_c,
+        estimated_viscosity_cp=properties.estimated_viscosity_cp,
+        boiling_temperature_c=properties.boiling_temperature_c,
+        saturation_temperature_c=properties.saturation_temperature_c,
+        dissolved_solids_kg_h=properties.dissolved_solids_kg_h,
+        water_kg_h=properties.water_kg_h,
+        notes=notes + properties.notes,
     )
 
 
@@ -323,11 +461,13 @@ def calculate_two_stream_blend(
 
 
 __all__ = [
+    "BrixReconciliationResult",
     "DilutionResult",
     "PRODUCT_PROFILES",
     "ProductProfile",
     "SolutionPropertyResult",
     "TwoStreamBlendResult",
+    "calculate_brix_reconciliation",
     "calculate_dilution_water",
     "calculate_two_stream_blend",
     "estimate_solution_properties",

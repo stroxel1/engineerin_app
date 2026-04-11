@@ -71,6 +71,7 @@ Default URL:
   - BPE-aware thermal point
   - flash steam estimate
   - product-specific solution properties for citric acid, fructose, dextrose, and sucrose syrups/solutions
+  - Brix reconciliation against lab solids and/or density with suggested refractometer offset/factor plus downstream property screening
   - dilution water balance for syrup and liquor blend-back work
   - two-stream blend mixing for liquor, syrup, condensate, and water additions with blended solids, temperature, and downstream property screening
   - tank inventory / hold-up screening for vertical cylindrical, horizontal cylindrical, and rectangular tanks with optional density and transfer-rate based mass and residence-time checks
@@ -87,6 +88,8 @@ Default URL:
   - pump hydraulic/brake power
   - NPSHa screening
   - segmented suction/discharge system breakdowns
+  - parallel branch balancing screen
+  - vessel/static-head screen
   - control-valve Cv/Kv sizing
   - pump vs system curve overlay
   - liquid control-valve Cv/Kv sizing with valve-authority, trim-opening, cavitation-index, FL-based critical-ΔP, and flashing screening

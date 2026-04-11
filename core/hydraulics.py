@@ -142,6 +142,37 @@ class SystemCurvePoint:
     total_dynamic_head_m: float
 
 
+@dataclass
+class VesselStaticHeadResult:
+    liquid_level_m: float
+    liquid_height_m: float
+    static_head_m: float
+    bottom_pressure_kpa_g: float
+    volume_m3: float
+    notes: list[str]
+
+
+@dataclass
+class ParallelBranchResult:
+    name: str
+    flow_m3_h: float
+    pressure_drop_kpa: float
+    total_dynamic_head_m: float
+    velocity_m_s: float
+    percent_of_total_flow: float
+    notes: list[str]
+
+
+@dataclass
+class ParallelBranchBalanceResult:
+    branches: list[ParallelBranchResult]
+    total_flow_m3_h: float
+    max_branch_head_m: float
+    min_branch_head_m: float
+    head_spread_m: float
+    notes: list[str]
+
+
 def _friction_factor_swamee_jain(reynolds_number: float, roughness_m: float, diameter_m: float) -> float:
     if reynolds_number <= 0:
         raise ValueError("Reynolds number must be positive")
@@ -512,6 +543,88 @@ def size_control_valve(
         cavitation_index_sigma=cavitation_index_sigma,
         cavitation_status=cavitation_status,
         outlet_flashing_expected=outlet_flashing_expected,
+        notes=notes,
+    )
+
+
+def calculate_vessel_static_head(
+    liquid_height_m: float,
+    vessel_diameter_m: float,
+    density_kg_m3: float,
+    level_fraction: float = 1.0,
+) -> VesselStaticHeadResult:
+    liquid_level_m = max(liquid_height_m * level_fraction, 0.0)
+    radius_m = vessel_diameter_m / 2.0
+    volume_m3 = math.pi * radius_m * radius_m * liquid_level_m
+    static_head_m = liquid_level_m
+    bottom_pressure_kpa_g = density_kg_m3 * G * static_head_m / 1000.0
+    notes = ["Assumes a vertical cylindrical vessel with flat level geometry."]
+    if level_fraction > 1.0:
+        notes.append("Level fraction exceeds 1.0; result effectively represents overflow height.")
+    return VesselStaticHeadResult(
+        liquid_level_m=liquid_level_m,
+        liquid_height_m=liquid_height_m,
+        static_head_m=static_head_m,
+        bottom_pressure_kpa_g=bottom_pressure_kpa_g,
+        volume_m3=volume_m3,
+        notes=notes,
+    )
+
+
+def analyze_parallel_branches(
+    total_flow_m3_h: float,
+    density_kg_m3: float,
+    viscosity_cp: float,
+    branches: list[PipeSegment],
+    branch_split_fractions: list[float],
+) -> ParallelBranchBalanceResult:
+    if len(branches) != len(branch_split_fractions):
+        raise ValueError("Branch list and split fractions must be the same length.")
+    total_fraction = sum(branch_split_fractions)
+    if total_fraction <= 0:
+        raise ValueError("Total branch split fraction must be positive.")
+    branch_results: list[ParallelBranchResult] = []
+    notes: list[str] = ["Parallel-branch screen assumes the entered split fractions are the actual flow split."]
+    head_values: list[float] = []
+    for branch, fraction in zip(branches, branch_split_fractions):
+        branch_flow = total_flow_m3_h * fraction / total_fraction
+        result = calculate_hydraulics(
+            HydraulicInputs(
+                volumetric_flow_m3_h=branch_flow,
+                density_kg_m3=density_kg_m3,
+                viscosity_cp=viscosity_cp,
+                pipe_id_mm=branch.pipe_id_mm,
+                pipe_length_m=branch.pipe_length_m,
+                roughness_mm=branch.roughness_mm,
+                elevation_change_m=branch.elevation_change_m,
+                fitting_k_total=branch.fitting_k_total,
+            )
+        )
+        head_values.append(result.total_dynamic_head_m)
+        branch_results.append(
+            ParallelBranchResult(
+                name=branch.name,
+                flow_m3_h=branch_flow,
+                pressure_drop_kpa=result.pressure_drop_kpa,
+                total_dynamic_head_m=result.total_dynamic_head_m,
+                velocity_m_s=result.velocity_m_s,
+                percent_of_total_flow=100.0 * branch_flow / max(total_flow_m3_h, 1e-9),
+                notes=result.notes,
+            )
+        )
+    max_head = max(head_values)
+    min_head = min(head_values)
+    spread = max_head - min_head
+    if spread > 2.0:
+        notes.append("Parallel branch head spread is large; the entered split likely will not self-balance without throttling/orifices/control valves.")
+    else:
+        notes.append("Parallel branch head spread is relatively tight for a first-pass balance screen.")
+    return ParallelBranchBalanceResult(
+        branches=branch_results,
+        total_flow_m3_h=total_flow_m3_h,
+        max_branch_head_m=max_head,
+        min_branch_head_m=min_head,
+        head_spread_m=spread,
         notes=notes,
     )
 
