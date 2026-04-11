@@ -58,6 +58,23 @@ class DilutionResult:
     notes: list[str]
 
 
+@dataclass
+class TwoStreamBlendResult:
+    product: str
+    stream_a_rate_kg_h: float
+    stream_b_rate_kg_h: float
+    stream_a_solids_wt_pct: float
+    stream_b_solids_wt_pct: float
+    total_rate_kg_h: float
+    blended_solids_wt_pct: float
+    blended_water_kg_h: float
+    blended_solids_kg_h: float
+    stream_a_temperature_c: float | None
+    stream_b_temperature_c: float | None
+    blended_temperature_c: float | None
+    notes: list[str]
+
+
 PRODUCT_PROFILES: dict[str, ProductProfile] = {
     "citric_acid": ProductProfile(
         key="citric_acid",
@@ -240,12 +257,79 @@ def calculate_dilution_water(
     )
 
 
+def calculate_two_stream_blend(
+    product: str,
+    stream_a_rate_value: float,
+    stream_a_rate_unit: str,
+    stream_a_solids_wt_pct: float,
+    stream_b_rate_value: float,
+    stream_b_rate_unit: str,
+    stream_b_solids_wt_pct: float,
+    stream_a_temperature_c: float | None = None,
+    stream_b_temperature_c: float | None = None,
+) -> TwoStreamBlendResult:
+    profile = get_product_profile(product)
+    stream_a_rate_kg_h = mass_flow_to_kg_h(stream_a_rate_value, stream_a_rate_unit)
+    stream_b_rate_kg_h = mass_flow_to_kg_h(stream_b_rate_value, stream_b_rate_unit)
+    if stream_a_rate_kg_h < 0.0 or stream_b_rate_kg_h < 0.0:
+        raise ValueError("Stream flow rates must be zero or greater.")
+
+    total_rate_kg_h = stream_a_rate_kg_h + stream_b_rate_kg_h
+    if total_rate_kg_h <= 0.0:
+        raise ValueError("At least one stream must have a flow above zero.")
+
+    stream_a_solids = max(stream_a_solids_wt_pct, 0.0) / 100.0
+    stream_b_solids = max(stream_b_solids_wt_pct, 0.0) / 100.0
+    if stream_a_solids > 1.0 or stream_b_solids > 1.0:
+        raise ValueError("Stream solids must stay within 0 to 100 wt%.")
+
+    blended_solids_kg_h = stream_a_rate_kg_h * stream_a_solids + stream_b_rate_kg_h * stream_b_solids
+    blended_water_kg_h = total_rate_kg_h - blended_solids_kg_h
+    blended_solids_wt_pct = blended_solids_kg_h / total_rate_kg_h * 100.0
+
+    blended_temperature_c = None
+    if stream_a_temperature_c is not None and stream_b_temperature_c is not None:
+        blended_temperature_c = (
+            stream_a_rate_kg_h * stream_a_temperature_c + stream_b_rate_kg_h * stream_b_temperature_c
+        ) / total_rate_kg_h
+
+    notes = [
+        f"Computed on total-mass and dissolved-solids balances for {profile.display_name}.",
+        "Blend temperature uses a flow-weighted average and ignores heat of solution, flashing, and unequal heat capacities.",
+        "For precise blend tank temperature or density, validate against plant tests when one stream is much hotter or materially different in composition.",
+    ]
+    if stream_a_solids_wt_pct == 0.0 or stream_b_solids_wt_pct == 0.0:
+        notes.append("A zero-solids stream is treated as water or condensate dilution on this screening basis.")
+    if blended_solids_wt_pct > profile.max_recommended_solids_wt_pct:
+        notes.append(
+            f"Blended solids exceed the normal screening range for {profile.display_name}; downstream density, BPE, and viscosity estimates will be less certain."
+        )
+
+    return TwoStreamBlendResult(
+        product=product,
+        stream_a_rate_kg_h=stream_a_rate_kg_h,
+        stream_b_rate_kg_h=stream_b_rate_kg_h,
+        stream_a_solids_wt_pct=stream_a_solids_wt_pct,
+        stream_b_solids_wt_pct=stream_b_solids_wt_pct,
+        total_rate_kg_h=total_rate_kg_h,
+        blended_solids_wt_pct=blended_solids_wt_pct,
+        blended_water_kg_h=blended_water_kg_h,
+        blended_solids_kg_h=blended_solids_kg_h,
+        stream_a_temperature_c=stream_a_temperature_c,
+        stream_b_temperature_c=stream_b_temperature_c,
+        blended_temperature_c=blended_temperature_c,
+        notes=notes,
+    )
+
+
 __all__ = [
     "DilutionResult",
     "PRODUCT_PROFILES",
     "ProductProfile",
     "SolutionPropertyResult",
+    "TwoStreamBlendResult",
     "calculate_dilution_water",
+    "calculate_two_stream_blend",
     "estimate_solution_properties",
     "get_product_profile",
     "list_supported_products",

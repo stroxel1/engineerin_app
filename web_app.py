@@ -36,8 +36,10 @@ from engineering_app.core.quicktools import (
     pressure_conversion,
     solution_properties,
     steam_for_duty,
+    tank_inventory,
     temperature_conversion,
     thermal_point,
+    two_stream_blend,
 )
 from engineering_app.core.solutions import PRODUCT_PROFILES
 from engineering_app.core.steam import duty_from_steam_flow, evaluate_steam_header_pressure_change, thermo_compressor_balance
@@ -143,7 +145,7 @@ def render_dashboard() -> None:
 
 def render_quick_tools() -> None:
     st.header("Quick Tools")
-    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Dilution"])
+    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Dilution", "Two-Stream Blend", "Tank Inventory"])
     product_options = list(PRODUCT_PROFILES.keys())
     product_labels = {key: PRODUCT_PROFILES[key].display_name for key in product_options}
 
@@ -248,6 +250,204 @@ def render_quick_tools() -> None:
             m3.metric("Solids held constant", f"{kg_h_to_mass_flow(result.solids_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
             st.json(asdict(result))
             _show_notes(result.notes)
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[6]:
+        st.caption("Blend two liquor, syrup, water, or condensate streams on a dissolved-solids basis and screen the resulting mixed properties.")
+        c1, c2 = st.columns(2)
+        product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_blend_product")
+        output_flow_unit = c2.selectbox("Blend flow output unit", MASS_FLOW_UNITS, index=0, key="qt_blend_flow_out")
+
+        st.markdown("**Stream A**")
+        a1, a2, a3, a4 = st.columns(4)
+        stream_a_rate_value = a1.number_input("Stream A flow", min_value=0.0, value=8000.0, key="qt_blend_a_flow")
+        stream_a_rate_unit = a2.selectbox("Stream A flow unit", MASS_FLOW_UNITS, index=0, key="qt_blend_a_flow_unit")
+        stream_a_solids_wt_pct = a3.number_input("Stream A solids (wt%)", min_value=0.0, max_value=100.0, value=68.0, key="qt_blend_a_solids")
+        stream_a_temperature_value = a4.number_input("Stream A temperature", value=65.0, key="qt_blend_a_temp")
+        a5, a6 = st.columns(2)
+        stream_a_temperature_unit = a5.selectbox("Stream A temperature unit", TEMPERATURE_UNITS, index=0, key="qt_blend_a_temp_unit")
+        temp_output_unit = a6.selectbox("Blend temperature output unit", TEMPERATURE_UNITS, index=0, key="qt_blend_temp_out")
+
+        st.markdown("**Stream B**")
+        b1, b2, b3, b4 = st.columns(4)
+        stream_b_rate_value = b1.number_input("Stream B flow", min_value=0.0, value=2500.0, key="qt_blend_b_flow")
+        stream_b_rate_unit = b2.selectbox("Stream B flow unit", MASS_FLOW_UNITS, index=0, key="qt_blend_b_flow_unit")
+        stream_b_solids_wt_pct = b3.number_input("Stream B solids (wt%)", min_value=0.0, max_value=100.0, value=0.0, key="qt_blend_b_solids")
+        stream_b_temperature_value = b4.number_input("Stream B temperature", value=25.0, key="qt_blend_b_temp")
+        b5, b6, b7, b8 = st.columns(4)
+        stream_b_temperature_unit = b5.selectbox("Stream B temperature unit", TEMPERATURE_UNITS, index=0, key="qt_blend_b_temp_unit")
+        pressure_value = b6.number_input("Property-screen pressure", value=20.0, key="qt_blend_pressure")
+        pressure_unit = b7.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="qt_blend_pressure_unit")
+        density_unit = b8.selectbox("Density output unit", DENSITY_UNITS, index=0, key="qt_blend_density_out")
+        c3, c4 = st.columns(2)
+        bpe_unit = c3.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="qt_blend_bpe_out")
+        viscosity_unit = c4.selectbox("Viscosity output unit", VISCOSITY_UNITS, index=0, key="qt_blend_visc_out")
+
+        try:
+            stream_a_temperature_c = temperature_to_c(stream_a_temperature_value, stream_a_temperature_unit)
+            stream_b_temperature_c = temperature_to_c(stream_b_temperature_value, stream_b_temperature_unit)
+            blend = two_stream_blend(
+                product=product,
+                stream_a_rate_value=stream_a_rate_value,
+                stream_a_rate_unit=stream_a_rate_unit,
+                stream_a_solids_wt_pct=stream_a_solids_wt_pct,
+                stream_b_rate_value=stream_b_rate_value,
+                stream_b_rate_unit=stream_b_rate_unit,
+                stream_b_solids_wt_pct=stream_b_solids_wt_pct,
+                stream_a_temperature_c=stream_a_temperature_c,
+                stream_b_temperature_c=stream_b_temperature_c,
+            )
+            property_temp_c = blend.blended_temperature_c if blend.blended_temperature_c is not None else stream_a_temperature_c
+            properties = solution_properties(
+                product,
+                blend.blended_solids_wt_pct,
+                property_temp_c,
+                pressure_value,
+                pressure_unit,
+                blend.total_rate_kg_h,
+                "kg/h",
+            )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Blended flow", f"{kg_h_to_mass_flow(blend.total_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            m2.metric("Blended solids", f"{blend.blended_solids_wt_pct:,.2f} wt%")
+            m3.metric("Dissolved solids", f"{kg_h_to_mass_flow(blend.blended_solids_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            blend_temp_display = (
+                f"{_display_temperature(blend.blended_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}"
+                if blend.blended_temperature_c is not None
+                else "Not calculated"
+            )
+            m4.metric("Blended temperature", blend_temp_display)
+            n1, n2, n3 = st.columns(3)
+            n1.metric("Estimated density", f"{kg_m3_to_density(properties.estimated_density_kg_m3, density_unit):,.2f} {density_unit}")
+            n2.metric("Estimated BPE", f"{_display_delta_t(properties.estimated_bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+            n3.metric("Estimated viscosity", f"{cp_to_viscosity(properties.estimated_viscosity_cp, viscosity_unit):,.3f} {viscosity_unit}")
+            st.json({"blend": asdict(blend), "properties": asdict(properties)})
+            _show_notes(blend.notes + properties.notes)
+            _remember_case(
+                "quick-tools-two-stream-blend",
+                {
+                    "product": product,
+                    "stream_a_rate_value": stream_a_rate_value,
+                    "stream_a_rate_unit": stream_a_rate_unit,
+                    "stream_a_solids_wt_pct": stream_a_solids_wt_pct,
+                    "stream_a_temperature_value": stream_a_temperature_value,
+                    "stream_a_temperature_unit": stream_a_temperature_unit,
+                    "stream_b_rate_value": stream_b_rate_value,
+                    "stream_b_rate_unit": stream_b_rate_unit,
+                    "stream_b_solids_wt_pct": stream_b_solids_wt_pct,
+                    "stream_b_temperature_value": stream_b_temperature_value,
+                    "stream_b_temperature_unit": stream_b_temperature_unit,
+                    "pressure_value": pressure_value,
+                    "pressure_unit": pressure_unit,
+                },
+                {"blend": asdict(blend), "properties": asdict(properties)},
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[7]:
+        c1, c2, c3 = st.columns(3)
+        tank_type = c1.selectbox(
+            "Tank type",
+            ["vertical_cylindrical", "horizontal_cylindrical", "rectangular"],
+            format_func=lambda key: {
+                "vertical_cylindrical": "Vertical cylindrical tank",
+                "horizontal_cylindrical": "Horizontal cylindrical tank",
+                "rectangular": "Rectangular tank / basin",
+            }[key],
+            key="qt_tank_type",
+        )
+        level_value = c2.number_input("Liquid level", min_value=0.0, value=2.4, key="qt_tank_level")
+        level_unit = c3.selectbox("Liquid level unit", LENGTH_UNITS, index=0, key="qt_tank_level_unit")
+
+        density_col, density_unit_col, volume_unit_col, time_unit_col = st.columns(4)
+        density_value = density_col.number_input("Optional liquid density", min_value=0.0, value=1000.0, key="qt_tank_density")
+        density_unit = density_unit_col.selectbox("Density unit", DENSITY_UNITS, index=0, key="qt_tank_density_unit")
+        output_volume_unit = volume_unit_col.selectbox("Volume output unit", VOLUME_UNITS, index=0, key="qt_tank_volume_out")
+        output_time_unit = time_unit_col.selectbox("Time output unit", TIME_UNITS, index=2, key="qt_tank_time_out")
+
+        transfer_col, transfer_unit_col = st.columns(2)
+        transfer_rate_value = transfer_col.number_input("Optional transfer rate", min_value=0.0, value=25.0, key="qt_tank_transfer_rate")
+        transfer_rate_unit = transfer_unit_col.selectbox("Transfer-rate unit", VOLUMETRIC_FLOW_UNITS, index=0, key="qt_tank_transfer_unit")
+
+        dimension_values: dict[str, float]
+        dimension_units: dict[str, str]
+        if tank_type == "vertical_cylindrical":
+            d1, d2, d3, d4 = st.columns(4)
+            diameter_value = d1.number_input("Tank diameter", min_value=0.01, value=3.2, key="qt_tank_vert_diameter")
+            diameter_unit = d2.selectbox("Diameter unit", LENGTH_UNITS, index=0, key="qt_tank_vert_diameter_unit")
+            height_value = d3.number_input("Straight-side height", min_value=0.01, value=6.0, key="qt_tank_vert_height")
+            height_unit = d4.selectbox("Height unit", LENGTH_UNITS, index=0, key="qt_tank_vert_height_unit")
+            dimension_values = {"diameter": diameter_value, "height": height_value}
+            dimension_units = {"diameter": diameter_unit, "height": height_unit}
+        elif tank_type == "horizontal_cylindrical":
+            d1, d2, d3, d4 = st.columns(4)
+            diameter_value = d1.number_input("Shell diameter", min_value=0.01, value=2.4, key="qt_tank_horiz_diameter")
+            diameter_unit = d2.selectbox("Diameter unit", LENGTH_UNITS, index=0, key="qt_tank_horiz_diameter_unit")
+            length_value = d3.number_input("Straight-shell length", min_value=0.01, value=8.0, key="qt_tank_horiz_length")
+            length_unit = d4.selectbox("Length unit", LENGTH_UNITS, index=0, key="qt_tank_horiz_length_unit")
+            dimension_values = {"diameter": diameter_value, "length": length_value}
+            dimension_units = {"diameter": diameter_unit, "length": length_unit}
+        else:
+            d1, d2, d3, d4, d5, d6 = st.columns(6)
+            length_value = d1.number_input("Tank length", min_value=0.01, value=5.0, key="qt_tank_rect_length")
+            length_unit = d2.selectbox("Length unit", LENGTH_UNITS, index=0, key="qt_tank_rect_length_unit")
+            width_value = d3.number_input("Tank width", min_value=0.01, value=3.0, key="qt_tank_rect_width")
+            width_unit = d4.selectbox("Width unit", LENGTH_UNITS, index=0, key="qt_tank_rect_width_unit")
+            height_value = d5.number_input("Straight-side height", min_value=0.01, value=2.5, key="qt_tank_rect_height")
+            height_unit = d6.selectbox("Height unit", LENGTH_UNITS, index=0, key="qt_tank_rect_height_unit")
+            dimension_values = {"length": length_value, "width": width_value, "height": height_value}
+            dimension_units = {"length": length_unit, "width": width_unit, "height": height_unit}
+
+        try:
+            density_arg = density_value if density_value > 0.0 else None
+            transfer_arg = transfer_rate_value if transfer_rate_value > 0.0 else None
+            result = tank_inventory(
+                tank_type=tank_type,
+                dimensions=dimension_values,
+                dimension_units=dimension_units,
+                liquid_level_value=level_value,
+                liquid_level_unit=level_unit,
+                density_value=density_arg,
+                density_unit=density_unit,
+                transfer_rate_value=transfer_arg,
+                transfer_rate_unit=transfer_rate_unit,
+            )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Liquid volume", f"{m3_to_volume(result.liquid_volume_m3, output_volume_unit):,.2f} {output_volume_unit}")
+            m2.metric("Tank total volume", f"{m3_to_volume(result.total_volume_m3, output_volume_unit):,.2f} {output_volume_unit}")
+            m3.metric("Free ullage", f"{m3_to_volume(result.available_ullage_m3, output_volume_unit):,.2f} {output_volume_unit}")
+            m4.metric("Fill level", f"{result.fill_fraction * 100.0:,.1f} %")
+            n1, n2, n3 = st.columns(3)
+            n1.metric("Clamped liquid level", f"{m_to_length(result.liquid_level_m, level_unit):,.2f} {level_unit}")
+            n2.metric(
+                "Liquid mass",
+                f"{result.liquid_mass_kg:,.0f} kg" if result.liquid_mass_kg is not None else "Not entered",
+            )
+            residence_display = (
+                f"{seconds_to_time(result.residence_time_h * 3600.0, output_time_unit):,.2f} {output_time_unit}"
+                if result.residence_time_h is not None
+                else "Not entered"
+            )
+            n3.metric("Residence / pump-out time", residence_display)
+            st.json(asdict(result))
+            _show_notes(result.notes)
+            _remember_case(
+                "quick-tools-tank-inventory",
+                {
+                    "tank_type": tank_type,
+                    "dimensions": dimension_values,
+                    "dimension_units": dimension_units,
+                    "liquid_level_value": level_value,
+                    "liquid_level_unit": level_unit,
+                    "density_value": density_arg,
+                    "density_unit": density_unit,
+                    "transfer_rate_value": transfer_arg,
+                    "transfer_rate_unit": transfer_rate_unit,
+                },
+                asdict(result),
+            )
         except ValueError as exc:
             st.error(str(exc))
 
@@ -1080,7 +1280,7 @@ def render_roadmap() -> None:
         {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
-        {"priority": 6, "area": "Quick tools", "next_step": "Add tank volume, blend/dilution, brix/solids, and utility cost estimate tools."},
+        {"priority": 6, "area": "Quick tools", "next_step": "Add brix/solids reconciliation and utility cost estimate tools, then extend blend workflows to ratio-target solving."},
     ]
     st.dataframe(pd.DataFrame(roadmap), use_container_width=True)
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")

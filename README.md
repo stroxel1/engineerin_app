@@ -26,6 +26,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - `core/crystallizers.py` — crystallizer calculations
 - `core/hydraulics.py` — pipe flow and TDH calculations
 - `core/steam.py` — steam duty and flash steam helpers
+- `core/tanks.py` — tank inventory / hold-up calculations
 - `core/thermal.py` — condensing/boiling temperature helpers
 - `core/quicktools.py` — engineer-facing wrappers
 - `core/units.py` — per-input unit conversion utilities
@@ -71,6 +72,8 @@ Default URL:
   - flash steam estimate
   - product-specific solution properties for citric acid, fructose, dextrose, and sucrose syrups/solutions
   - dilution water balance for syrup and liquor blend-back work
+  - two-stream blend mixing for liquor, syrup, condensate, and water additions with blended solids, temperature, and downstream property screening
+  - tank inventory / hold-up screening for vertical cylindrical, horizontal cylindrical, and rectangular tanks with optional density and transfer-rate based mass and residence-time checks
 - Hydraulics
   - velocity
   - Reynolds number
