@@ -77,6 +77,26 @@ class TwoStreamBlendResult:
 
 
 @dataclass
+class RatioTargetBlendResult:
+    product: str
+    known_stream_label: str
+    target_stream_label: str
+    known_stream_rate_kg_h: float
+    known_stream_solids_wt_pct: float
+    target_stream_solids_wt_pct: float
+    target_blend_solids_wt_pct: float
+    required_target_stream_rate_kg_h: float
+    total_rate_kg_h: float
+    blended_solids_kg_h: float
+    blended_water_kg_h: float
+    target_to_known_ratio: float
+    known_stream_temperature_c: float | None
+    target_stream_temperature_c: float | None
+    blended_temperature_c: float | None
+    notes: list[str]
+
+
+@dataclass
 class BrixReconciliationResult:
     product: str
     observed_brix: float
@@ -460,15 +480,109 @@ def calculate_two_stream_blend(
     )
 
 
+def calculate_ratio_target_blend(
+    product: str,
+    known_stream_rate_value: float,
+    known_stream_rate_unit: str,
+    known_stream_solids_wt_pct: float,
+    target_stream_solids_wt_pct: float,
+    target_blend_solids_wt_pct: float,
+    known_stream_temperature_c: float | None = None,
+    target_stream_temperature_c: float | None = None,
+    known_stream_label: str = "Known stream",
+    target_stream_label: str = "Targeted stream",
+) -> RatioTargetBlendResult:
+    profile = get_product_profile(product)
+    known_stream_rate_kg_h = mass_flow_to_kg_h(known_stream_rate_value, known_stream_rate_unit)
+    if known_stream_rate_kg_h <= 0.0:
+        raise ValueError("Known stream flow must be above zero to solve the target blend ratio.")
+
+    known_solids_fraction = known_stream_solids_wt_pct / 100.0
+    target_stream_solids_fraction = target_stream_solids_wt_pct / 100.0
+    target_blend_solids_fraction = target_blend_solids_wt_pct / 100.0
+    for value, label in (
+        (known_solids_fraction, known_stream_label),
+        (target_stream_solids_fraction, target_stream_label),
+        (target_blend_solids_fraction, "target blend"),
+    ):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{label.capitalize()} solids must stay within 0 to 100 wt%.")
+
+    denominator = target_stream_solids_fraction - target_blend_solids_fraction
+    numerator = known_stream_rate_kg_h * (target_blend_solids_fraction - known_solids_fraction)
+
+    if abs(denominator) < 1e-12:
+        raise ValueError(
+            "Target blend solids cannot equal the adjusted stream solids unless the fixed stream already sits at that same solids level."
+        )
+
+    required_target_stream_rate_kg_h = numerator / denominator
+    if required_target_stream_rate_kg_h < -1e-9:
+        raise ValueError(
+            "Requested target solids are outside the range spanned by the two streams; solve with a different second stream or swap the fixed/adjusted stream roles."
+        )
+    required_target_stream_rate_kg_h = max(required_target_stream_rate_kg_h, 0.0)
+
+    total_rate_kg_h = known_stream_rate_kg_h + required_target_stream_rate_kg_h
+    blended_solids_kg_h = (
+        known_stream_rate_kg_h * known_solids_fraction
+        + required_target_stream_rate_kg_h * target_stream_solids_fraction
+    )
+    blended_water_kg_h = total_rate_kg_h - blended_solids_kg_h
+    target_to_known_ratio = required_target_stream_rate_kg_h / known_stream_rate_kg_h
+
+    blended_temperature_c = None
+    if known_stream_temperature_c is not None and target_stream_temperature_c is not None:
+        blended_temperature_c = (
+            known_stream_rate_kg_h * known_stream_temperature_c
+            + required_target_stream_rate_kg_h * target_stream_temperature_c
+        ) / total_rate_kg_h
+
+    notes = [
+        f"Solved a dissolved-solids balance for {profile.display_name} using {known_stream_label.lower()} as the fixed stream and {target_stream_label.lower()} as the adjusted stream.",
+        "Target blend solids must lie between the two stream solids for a positive physical solution.",
+        "Blended temperature uses a flow-weighted average and ignores heat of solution, flashing, and unequal heat capacities.",
+    ]
+    if required_target_stream_rate_kg_h == 0.0:
+        notes.append(f"No {target_stream_label.lower()} flow is required because the fixed stream already sits at the requested target solids.")
+    if known_stream_solids_wt_pct == 0.0 or target_stream_solids_wt_pct == 0.0:
+        notes.append("A zero-solids stream is treated as water or condensate on this screening basis.")
+    if target_blend_solids_wt_pct > profile.max_recommended_solids_wt_pct:
+        notes.append(
+            f"Target blend solids exceed the normal screening range for {profile.display_name}; downstream density, BPE, and viscosity estimates will be less certain."
+        )
+
+    return RatioTargetBlendResult(
+        product=product,
+        known_stream_label=known_stream_label,
+        target_stream_label=target_stream_label,
+        known_stream_rate_kg_h=known_stream_rate_kg_h,
+        known_stream_solids_wt_pct=known_stream_solids_wt_pct,
+        target_stream_solids_wt_pct=target_stream_solids_wt_pct,
+        target_blend_solids_wt_pct=target_blend_solids_wt_pct,
+        required_target_stream_rate_kg_h=required_target_stream_rate_kg_h,
+        total_rate_kg_h=total_rate_kg_h,
+        blended_solids_kg_h=blended_solids_kg_h,
+        blended_water_kg_h=blended_water_kg_h,
+        target_to_known_ratio=target_to_known_ratio,
+        known_stream_temperature_c=known_stream_temperature_c,
+        target_stream_temperature_c=target_stream_temperature_c,
+        blended_temperature_c=blended_temperature_c,
+        notes=notes,
+    )
+
+
 __all__ = [
     "BrixReconciliationResult",
     "DilutionResult",
     "PRODUCT_PROFILES",
     "ProductProfile",
+    "RatioTargetBlendResult",
     "SolutionPropertyResult",
     "TwoStreamBlendResult",
     "calculate_brix_reconciliation",
     "calculate_dilution_water",
+    "calculate_ratio_target_blend",
     "calculate_two_stream_blend",
     "estimate_solution_properties",
     "get_product_profile",

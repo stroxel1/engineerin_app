@@ -39,6 +39,7 @@ from engineering_app.core.quicktools import (
     electricity_cost_comparison,
     flash_fraction,
     pressure_conversion,
+    ratio_target_blend,
     solution_properties,
     steam_cost,
     steam_cost_comparison,
@@ -187,7 +188,7 @@ def render_dashboard() -> None:
 
 def render_quick_tools() -> None:
     st.header("Quick Tools")
-    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Tank Inventory", "Utility Cost"])
+    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Ratio-Target Blend", "Tank Inventory", "Utility Cost"])
     product_options = list(PRODUCT_PROFILES.keys())
     product_labels = {key: PRODUCT_PROFILES[key].display_name for key in product_options}
 
@@ -488,6 +489,113 @@ def render_quick_tools() -> None:
             st.error(str(exc))
 
     with tabs[8]:
+        st.caption("Solve how much of a second stream is required to hit a target blend solids level while holding one known stream fixed.")
+        c1, c2, c3 = st.columns(3)
+        product = c1.selectbox("Product", product_options, format_func=lambda key: product_labels[key], key="qt_ratio_product")
+        output_flow_unit = c2.selectbox("Solved flow output unit", MASS_FLOW_UNITS, index=0, key="qt_ratio_flow_out")
+        solids_output_unit = c3.selectbox("Solids output unit", PERCENT_UNITS, index=0, key="qt_ratio_solids_out")
+
+        d1, d2 = st.columns(2)
+        known_stream_label = d1.text_input("Fixed stream label", value="Base liquor", key="qt_ratio_known_label")
+        target_stream_label = d2.text_input("Adjusted stream label", value="Water / dilution stream", key="qt_ratio_target_label")
+
+        st.markdown("**Fixed stream**")
+        a1, a2, a3, a4 = st.columns(4)
+        known_stream_rate_value = a1.number_input("Fixed stream flow", min_value=0.0, value=8000.0, key="qt_ratio_known_flow")
+        known_stream_rate_unit = a2.selectbox("Fixed stream flow unit", MASS_FLOW_UNITS, index=0, key="qt_ratio_known_flow_unit")
+        known_stream_solids_wt_pct = a3.number_input("Fixed stream solids (wt%)", min_value=0.0, max_value=100.0, value=68.0, key="qt_ratio_known_solids")
+        known_stream_temperature_value = a4.number_input("Fixed stream temperature", value=65.0, key="qt_ratio_known_temp")
+        a5, a6, a7 = st.columns(3)
+        known_stream_temperature_unit = a5.selectbox("Fixed stream temperature unit", TEMPERATURE_UNITS, index=0, key="qt_ratio_known_temp_unit")
+        target_stream_solids_wt_pct = a6.number_input("Adjusted stream solids (wt%)", min_value=0.0, max_value=100.0, value=0.0, key="qt_ratio_target_stream_solids")
+        target_blend_solids_wt_pct = a7.number_input("Target blend solids (wt%)", min_value=0.0, max_value=100.0, value=55.0, key="qt_ratio_target_blend_solids")
+
+        st.markdown("**Adjusted stream and property screen**")
+        b1, b2, b3, b4 = st.columns(4)
+        target_stream_temperature_value = b1.number_input("Adjusted stream temperature", value=25.0, key="qt_ratio_target_temp")
+        target_stream_temperature_unit = b2.selectbox("Adjusted stream temperature unit", TEMPERATURE_UNITS, index=0, key="qt_ratio_target_temp_unit")
+        pressure_value = b3.number_input("Property-screen pressure", value=20.0, key="qt_ratio_pressure")
+        pressure_unit = b4.selectbox("Pressure unit", PRESSURE_UNITS, index=0, key="qt_ratio_pressure_unit")
+        c4, c5, c6, c7 = st.columns(4)
+        density_unit = c4.selectbox("Density output unit", DENSITY_UNITS, index=0, key="qt_ratio_density_out")
+        bpe_unit = c5.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="qt_ratio_bpe_out")
+        viscosity_unit = c6.selectbox("Viscosity output unit", VISCOSITY_UNITS, index=0, key="qt_ratio_visc_out")
+        temp_output_unit = c7.selectbox("Blend temperature output unit", TEMPERATURE_UNITS, index=0, key="qt_ratio_temp_out")
+
+        try:
+            known_stream_temperature_c = temperature_to_c(known_stream_temperature_value, known_stream_temperature_unit)
+            target_stream_temperature_c = temperature_to_c(target_stream_temperature_value, target_stream_temperature_unit)
+            blend = ratio_target_blend(
+                product=product,
+                known_stream_rate_value=known_stream_rate_value,
+                known_stream_rate_unit=known_stream_rate_unit,
+                known_stream_solids_wt_pct=known_stream_solids_wt_pct,
+                target_stream_solids_wt_pct=target_stream_solids_wt_pct,
+                target_blend_solids_wt_pct=target_blend_solids_wt_pct,
+                known_stream_temperature_c=known_stream_temperature_c,
+                target_stream_temperature_c=target_stream_temperature_c,
+                known_stream_label=known_stream_label,
+                target_stream_label=target_stream_label,
+            )
+            property_temp_c = blend.blended_temperature_c if blend.blended_temperature_c is not None else known_stream_temperature_c
+            properties = solution_properties(
+                product,
+                blend.target_blend_solids_wt_pct,
+                property_temp_c,
+                pressure_value,
+                pressure_unit,
+                blend.total_rate_kg_h,
+                "kg/h",
+            )
+            solved_solids_display = _display_percent(blend.target_blend_solids_wt_pct / 100.0, solids_output_unit)
+            solids_unit_label = "wt%" if solids_output_unit == "%" else "fraction"
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(f"Required {target_stream_label}", f"{kg_h_to_mass_flow(blend.required_target_stream_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            m2.metric("Target-to-fixed ratio", f"{blend.target_to_known_ratio:,.3f}")
+            m3.metric("Final blend flow", f"{kg_h_to_mass_flow(blend.total_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            m4.metric("Target blend solids", f"{solved_solids_display:,.3f} {solids_unit_label}")
+
+            n1, n2, n3, n4 = st.columns(4)
+            n1.metric("Blended dissolved solids", f"{kg_h_to_mass_flow(blend.blended_solids_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            n2.metric("Blended water", f"{kg_h_to_mass_flow(blend.blended_water_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+            blend_temp_display = (
+                f"{_display_temperature(blend.blended_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}"
+                if blend.blended_temperature_c is not None
+                else "Not calculated"
+            )
+            n3.metric("Blended temperature", blend_temp_display)
+            n4.metric("Estimated density", f"{kg_m3_to_density(properties.estimated_density_kg_m3, density_unit):,.2f} {density_unit}")
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Estimated BPE", f"{_display_delta_t(properties.estimated_bpe_c, bpe_unit):,.2f} °{bpe_unit}")
+            p2.metric("Estimated viscosity", f"{cp_to_viscosity(properties.estimated_viscosity_cp, viscosity_unit):,.3f} {viscosity_unit}")
+            p3.metric("Boiling point", f"{_display_temperature(properties.boiling_temperature_c, temp_output_unit):,.2f} °{temp_output_unit}")
+            st.json({"blend": asdict(blend), "properties": asdict(properties)})
+            _show_notes(blend.notes + properties.notes)
+            _remember_case(
+                "quick-tools-ratio-target-blend",
+                {
+                    "product": product,
+                    "known_stream_label": known_stream_label,
+                    "target_stream_label": target_stream_label,
+                    "known_stream_rate_value": known_stream_rate_value,
+                    "known_stream_rate_unit": known_stream_rate_unit,
+                    "known_stream_solids_wt_pct": known_stream_solids_wt_pct,
+                    "known_stream_temperature_value": known_stream_temperature_value,
+                    "known_stream_temperature_unit": known_stream_temperature_unit,
+                    "target_stream_solids_wt_pct": target_stream_solids_wt_pct,
+                    "target_blend_solids_wt_pct": target_blend_solids_wt_pct,
+                    "target_stream_temperature_value": target_stream_temperature_value,
+                    "target_stream_temperature_unit": target_stream_temperature_unit,
+                    "pressure_value": pressure_value,
+                    "pressure_unit": pressure_unit,
+                },
+                {"blend": asdict(blend), "properties": asdict(properties)},
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[9]:
         c1, c2, c3 = st.columns(3)
         tank_type = c1.selectbox(
             "Tank type",
@@ -1763,7 +1871,7 @@ def render_roadmap() -> None:
         ("todo", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
         ("todo", "Evaporators: add design-calibrated evaporator mode from workbook logic"),
         ("todo", "Crystallizers: add stronger citric/fructose solubility and supersaturation screens"),
-        ("todo", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
+        ("done", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
     ])
 
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")

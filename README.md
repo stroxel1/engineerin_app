@@ -74,6 +74,7 @@ Default URL:
   - Brix reconciliation against lab solids and/or density with suggested refractometer offset/factor plus downstream property screening
   - dilution water balance for syrup and liquor blend-back work
   - two-stream blend mixing for liquor, syrup, condensate, and water additions with blended solids, temperature, and downstream property screening
+  - ratio-target blend solving to determine required makeup/addition flow needed to hit a target solids level from one fixed stream
   - tank inventory / hold-up screening for vertical cylindrical, horizontal cylindrical, and rectangular tanks with optional density and transfer-rate based mass and residence-time checks
   - utility cost screening for steam users and electric motors with hourly/daily/annual operating cost estimates
   - current-vs-proposed utility comparison deltas with annual savings estimates for steam and electricity
@@ -130,5 +131,6 @@ Default URL:
 - Pressure is handled internally on an absolute kPa basis.
 - The engineering calculator pages now expose selectable units on inputs and displayed outputs.
 - Utility cost tools now include current-vs-proposed comparison screens so annual savings can be estimated directly in-app.
+- Quick Tools now include ratio-target blend solving so operators can back-calculate required dilution/addition rates from a desired final solids target.
 - Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.
 - Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.

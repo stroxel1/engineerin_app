@@ -39,6 +39,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 13. Dashboard and roadmap are now intended to stay updated with active work and completed items shown struck through in-app.
 14. Quick Tools expanded with utility cost screens for steam and electricity so plant issues can be translated into hourly/daily/annual operating-cost impact.
 15. Quick Tools utility cost work now includes current-vs-proposed delta screens with annual savings estimates for steam and electricity.
+16. Quick Tools ratio-target blend solver added so a fixed liquor stream can be paired with a solved dilution/addition stream to hit a target final solids level with downstream property screening.
 
 ## Recent git commits
 - `7af1d88` Fix hydraulics page bottom rendering error
@@ -68,13 +69,11 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - suction/discharge vessel modeling refinement
    - pump curve libraries or upload-based pump curves matched against system curves
    - optional balancing-valve/orifice coefficient sizing from the new self-balancing branch results
-2. Quick tools
-   - ratio-target blend solving
-3. Evaporators
+2. Evaporators
    - design-calibrated evaporator mode from workbook logic
-4. Steam jets
+3. Steam jets
    - import workbook-derived curve families and compare multiple models
-5. Crystallizers
+4. Crystallizers
    - stronger solubility / supersaturation correlations
 
 ## If resuming after disconnect

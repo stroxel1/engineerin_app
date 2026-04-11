@@ -6,6 +6,7 @@ from engineering_app.core.hydraulics import calculate_hydraulics_with_units
 from engineering_app.core.solutions import (
     calculate_brix_reconciliation,
     calculate_dilution_water,
+    calculate_ratio_target_blend,
     calculate_two_stream_blend,
     estimate_solution_properties,
 )
@@ -210,6 +211,32 @@ def two_stream_blend(
     )
 
 
+def ratio_target_blend(
+    product: str,
+    known_stream_rate_value: float,
+    known_stream_rate_unit: str,
+    known_stream_solids_wt_pct: float,
+    target_stream_solids_wt_pct: float,
+    target_blend_solids_wt_pct: float,
+    known_stream_temperature_c: float | None = None,
+    target_stream_temperature_c: float | None = None,
+    known_stream_label: str = "Known stream",
+    target_stream_label: str = "Targeted stream",
+):
+    return calculate_ratio_target_blend(
+        product=product,
+        known_stream_rate_value=known_stream_rate_value,
+        known_stream_rate_unit=known_stream_rate_unit,
+        known_stream_solids_wt_pct=known_stream_solids_wt_pct,
+        target_stream_solids_wt_pct=target_stream_solids_wt_pct,
+        target_blend_solids_wt_pct=target_blend_solids_wt_pct,
+        known_stream_temperature_c=known_stream_temperature_c,
+        target_stream_temperature_c=target_stream_temperature_c,
+        known_stream_label=known_stream_label,
+        target_stream_label=target_stream_label,
+    )
+
+
 def tank_inventory(
     tank_type: str,
     dimensions: dict[str, float],
@@ -250,6 +277,7 @@ __all__ = [
     "brix_reconciliation",
     "dilution_water",
     "two_stream_blend",
+    "ratio_target_blend",
     "tank_inventory",
     "c_to_f",
     "f_to_c",
