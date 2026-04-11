@@ -7,6 +7,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - evaporator operating screens
 - crystallizer operating screens
 - workbook inspection and curve ingestion scaffolding
+- case save/load workflows
 
 ## Current stack
 - Python
@@ -19,7 +20,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - `app.py` — simple manifest entrypoint
 - `web_app.py` — runnable Streamlit browser app
 - `core/models.py` — canonical engineering case/stream/equipment models
-- `core/curves.py` — curve ingestion and interpolation helpers
+- `core/curves.py` — curve interpolation and steam-jet operating-point helpers
 - `core/evaporators.py` — evaporator calculations
 - `core/crystallizers.py` — crystallizer calculations
 - `core/hydraulics.py` — pipe flow and TDH calculations
@@ -27,10 +28,11 @@ A practical process-engineering application for day-to-day plant work, focused o
 - `core/thermal.py` — condensing/boiling temperature helpers
 - `core/quicktools.py` — engineer-facing wrappers
 - `core/units.py` — per-input unit conversion utilities
-- `core/cases.py` — save/load case handling scaffold
+- `core/cases.py` — save/load case handling
 - `io/` — workbook inspection and normalization scaffolding
 - `state/` — central app state models/store
 - `docs/` — assumptions and product requirements
+- `data/cases/` — saved engineering cases
 
 ## Install
 From the parent directory:
@@ -65,6 +67,11 @@ Default URL:
   - pressure drop
   - TDH
   - line volume and residence time
+- Steam Jets
+  - manual curve editor
+  - operating-point screening vs curve
+  - curve interpolation
+  - % of curve and deviation view
 - Steam & Utilities
   - steam required for duty
   - duty from steam flow
@@ -77,9 +84,16 @@ Default URL:
   - slurry and mother liquor estimate
   - circulation ratio
   - residence time estimate
+- Workbook Import
+  - upload `.xlsx` / `.xlsm`
+  - inspect sheet dimensions, hidden state, freeze panes, formulas, headers, and sample rows
+  - preview normalized tables
+- Case Manager
+  - save the latest calculation payload
+  - browse and load saved JSON cases
 
 ## Notes
 - The current tools are engineering screens, not rigorous design models.
 - Pressure is handled internally on an absolute kPa basis.
 - Per-input unit selectors are built into the browser shell.
-- Workbook inspection scaffolding remains available for future Excel integration.
+- Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.

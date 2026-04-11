@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
+from pathlib import Path
+import tempfile
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
+from engineering_app.core.cases import CaseStore
 from engineering_app.core.crystallizers import CrystallizerInputs, estimate_crystallizer
+from engineering_app.core.curves import evaluate_operating_point, make_curve_from_xy_rows
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
 from engineering_app.core.hydraulics import calculate_hydraulics_with_units
 from engineering_app.core.quicktools import flash_fraction, pressure_conversion, steam_for_duty, temperature_conversion, thermal_point
 from engineering_app.core.steam import duty_from_steam_flow
 from engineering_app.core.units import LENGTH_UNITS, MASS_FLOW_UNITS, PRESSURE_UNITS, TEMPERATURE_UNITS, VOLUME_UNITS, VOLUMETRIC_FLOW_UNITS
+from engineering_app.io.normalizers import normalize_inspection
+from engineering_app.io.workbook_inspector import inspect_workbook
 
 st.set_page_config(page_title="Engineering App", page_icon="⚙️", layout="wide")
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+CASE_STORE = CaseStore(PROJECT_ROOT / "data" / "cases")
 
 
 def _show_notes(notes: list[str]) -> None:
@@ -21,13 +32,22 @@ def _show_notes(notes: list[str]) -> None:
         st.caption(f"- {note}")
 
 
+def _remember_case(page: str, inputs: dict, result: dict) -> None:
+    st.session_state["last_case_payload"] = {
+        "page": page,
+        "inputs": inputs,
+        "result": result,
+    }
+
+
 def render_dashboard() -> None:
     st.title("Engineering App")
-    st.write("Practical plant engineering tools for steam, hydraulics, evaporation, and crystallization.")
-    cols = st.columns(4)
+    st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, and workbook inspection.")
+    cols = st.columns(5)
     cards = [
         ("Quick tools", "Pressure, temperature, and thermal conversions"),
         ("Hydraulics", "Velocity, pressure drop, TDH, and line residence time"),
+        ("Steam jets", "Curve comparison and operating-point screening"),
         ("Evaporators", "Duty, steam demand, and ΔT screen"),
         ("Crystallizers", "Yield, slurry rate, circulation ratio, and residence time"),
     ]
@@ -35,6 +55,7 @@ def render_dashboard() -> None:
         with col:
             st.metric(title, "Ready")
             st.caption(desc)
+
 
 
 def render_quick_tools() -> None:
@@ -48,6 +69,7 @@ def render_quick_tools() -> None:
         to_unit = c3.selectbox("To unit", PRESSURE_UNITS, index=0)
         result = pressure_conversion(value, from_unit, to_unit)
         st.metric("Converted pressure", f"{result:,.3f} {to_unit}")
+        _remember_case("quick-tools-pressure", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_pressure": result})
 
     with tab2:
         c1, c2, c3 = st.columns(3)
@@ -56,6 +78,7 @@ def render_quick_tools() -> None:
         to_unit = c3.selectbox("To unit", TEMPERATURE_UNITS, index=0)
         result = temperature_conversion(value, from_unit, to_unit)
         st.metric("Converted temperature", f"{result:,.2f} °{to_unit}")
+        _remember_case("quick-tools-temperature", {"value": value, "from_unit": from_unit, "to_unit": to_unit}, {"converted_temperature": result})
 
     with tab3:
         c1, c2, c3 = st.columns(3)
@@ -63,7 +86,9 @@ def render_quick_tools() -> None:
         pressure_unit = c2.selectbox("Pressure basis", PRESSURE_UNITS, index=0, key="tp_unit")
         bpe_c = c3.number_input("BPE (°C)", value=3.0)
         point = thermal_point(pressure_value, pressure_unit, bpe_c)
-        st.json(asdict(point))
+        point_dict = asdict(point)
+        st.json(point_dict)
+        _remember_case("quick-tools-thermal-point", {"pressure_value": pressure_value, "pressure_unit": pressure_unit, "bpe_c": bpe_c}, point_dict)
 
     with tab4:
         c1, c2, c3, c4 = st.columns(4)
@@ -72,11 +97,14 @@ def render_quick_tools() -> None:
         flash_pressure_unit = c3.selectbox("Flash pressure unit", PRESSURE_UNITS, index=0, key="flash_unit")
         condensate_flow = c4.number_input("Condensate flow (kg/h)", value=10000.0)
         result = flash_fraction(condensate_temp_c, flash_pressure_value, flash_pressure_unit, condensate_flow)
+        result_dict = asdict(result)
         m1, m2, m3 = st.columns(3)
         m1.metric("Flash fraction", f"{result.flash_fraction:.3f}")
         m2.metric("Flash steam", f"{result.flash_steam_kg_h:,.1f} kg/h")
         m3.metric("Remaining liquid", f"{result.remaining_liquid_kg_h:,.1f} kg/h")
         _show_notes(result.notes)
+        _remember_case("quick-tools-flash", {"condensate_temp_c": condensate_temp_c, "flash_pressure_value": flash_pressure_value, "flash_pressure_unit": flash_pressure_unit, "condensate_flow_kg_h": condensate_flow}, result_dict)
+
 
 
 def render_hydraulics() -> None:
@@ -113,13 +141,64 @@ def render_hydraulics() -> None:
         elevation_change_unit=elevation_unit,
         fitting_k_total=fitting_k,
     )
+    result_dict = asdict(result)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Velocity", f"{result.velocity_m_s:,.2f} m/s")
     m2.metric("Pressure drop", f"{result.pressure_drop_kpa:,.1f} kPa")
     m3.metric("TDH", f"{result.total_dynamic_head_m:,.1f} m")
     m4.metric("Residence time", f"{result.residence_time_s:,.1f} s")
-    st.json(asdict(result))
+    st.json(result_dict)
     _show_notes(result.notes)
+    _remember_case("hydraulics", {"flow_value": flow_value, "flow_unit": flow_unit, "density_kg_m3": density, "viscosity_cp": viscosity, "pipe_id": pipe_id, "pipe_id_unit": pipe_id_unit, "pipe_length": pipe_length, "pipe_length_unit": pipe_length_unit, "roughness_mm": roughness_mm, "elevation_change": elevation_change, "elevation_unit": elevation_unit, "fitting_k_total": fitting_k}, result_dict)
+
+
+
+def render_steam_jets() -> None:
+    st.header("Steam Jets / Thermo-Compressors")
+    st.write("Enter a vendor or inferred performance curve and compare one operating point against it.")
+
+    default_curve = pd.DataFrame(
+        [
+            {"suction_load_kg_h": 2000.0, "motive_steam_kg_h": 3200.0},
+            {"suction_load_kg_h": 4000.0, "motive_steam_kg_h": 5000.0},
+            {"suction_load_kg_h": 6000.0, "motive_steam_kg_h": 7100.0},
+            {"suction_load_kg_h": 8000.0, "motive_steam_kg_h": 9500.0},
+        ]
+    )
+    edited = st.data_editor(default_curve, num_rows="dynamic", use_container_width=True)
+
+    c1, c2, c3, c4 = st.columns(4)
+    curve_name = c1.text_input("Curve name", value="Thermo-compressor A")
+    x_col = c2.selectbox("X column", list(edited.columns), index=0)
+    y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0)
+    family = c4.text_input("Family / motive basis", value="Motive 3.5 barg")
+
+    operating_x = st.number_input("Operating suction load / x-value", value=5000.0)
+    actual_y = st.number_input("Actual motive steam / y-value", value=6200.0)
+
+    rows = edited.to_dict(orient="records")
+    curve = make_curve_from_xy_rows(curve_name, x_col, y_col, rows, family=family)
+    result = evaluate_operating_point(curve, operating_x, actual_y)
+    result_dict = asdict(result)
+
+    plot_df = edited.copy()
+    predicted_y = result.predicted_y
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=plot_df[x_col], y=plot_df[y_col], mode="lines+markers", name="Curve"))
+    fig.add_trace(go.Scatter(x=[operating_x], y=[predicted_y], mode="markers", marker=dict(size=12), name="Predicted point"))
+    fig.add_trace(go.Scatter(x=[operating_x], y=[actual_y], mode="markers", marker=dict(size=12, symbol="diamond"), name="Actual point"))
+    fig.update_layout(xaxis_title=x_col, yaxis_title=y_col, title="Steam-Jet Operating Point vs Curve")
+    st.plotly_chart(fig, use_container_width=True)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Predicted y", f"{result.predicted_y:,.1f}")
+    m2.metric("Actual y", f"{result.actual_y:,.1f}")
+    m3.metric("% of curve", f"{result.percent_of_curve:,.1f}%")
+    m4.metric("Deviation", f"{result.deviation_pct:,.1f}%")
+    _show_notes(result.notes)
+    st.json({"curve": asdict(curve), "operating_point_result": result_dict})
+    _remember_case("steam-jets", {"curve_name": curve_name, "family": family, "x_column": x_col, "y_column": y_col, "curve_rows": rows, "operating_x": operating_x, "actual_y": actual_y}, {"curve": asdict(curve), "operating_point_result": result_dict})
+
 
 
 def render_steam() -> None:
@@ -132,8 +211,10 @@ def render_steam() -> None:
         pressure_value = c2.number_input("Steam pressure", value=3.5)
         pressure_unit = c3.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="steam_for_duty_unit")
         result = steam_for_duty(duty_kw, pressure_value, pressure_unit)
-        st.json(asdict(result))
+        result_dict = asdict(result)
+        st.json(result_dict)
         _show_notes(result.notes)
+        _remember_case("steam-for-duty", {"duty_kw": duty_kw, "pressure_value": pressure_value, "pressure_unit": pressure_unit}, result_dict)
 
     with tab2:
         c1, c2, c3, c4 = st.columns(4)
@@ -142,8 +223,11 @@ def render_steam() -> None:
         pressure_value = c3.number_input("Steam pressure", value=3.5)
         pressure_unit = c4.selectbox("Pressure unit", PRESSURE_UNITS, index=4, key="duty_from_steam_unit")
         result = duty_from_steam_flow(steam_flow, steam_flow_unit, pressure_value, pressure_unit)
-        st.json(asdict(result))
+        result_dict = asdict(result)
+        st.json(result_dict)
         _show_notes(result.notes)
+        _remember_case("duty-from-steam", {"steam_flow": steam_flow, "steam_flow_unit": steam_flow_unit, "pressure_value": pressure_value, "pressure_unit": pressure_unit}, result_dict)
+
 
 
 def render_evaporators() -> None:
@@ -182,6 +266,7 @@ def render_evaporators() -> None:
             estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
         )
     )
+    result_dict = asdict(result)
 
     df = pd.DataFrame(
         [
@@ -193,10 +278,12 @@ def render_evaporators() -> None:
     )
     col1, col2 = st.columns([1, 1])
     with col1:
-        st.json(asdict(result))
+        st.json(result_dict)
         _show_notes(result.notes)
     with col2:
         st.plotly_chart(px.bar(df, x="Stream", y="kg/h", title="Evaporator Mass and Steam Screen"), use_container_width=True)
+    _remember_case("evaporators", {"feed_rate": feed_rate, "feed_rate_unit": feed_rate_unit, "feed_solids_wt_pct": feed_solids, "product_solids_wt_pct": product_solids, "steam_pressure": steam_pressure, "steam_pressure_unit": steam_pressure_unit, "operating_pressure": operating_pressure, "operating_pressure_unit": operating_pressure_unit, "passes": passes, "recirculation_ratio": recirc, "bpe_c": bpe, "specific_evaporation_duty_kj_kg": duty_per_kg}, result_dict)
+
 
 
 def render_crystallizers() -> None:
@@ -231,17 +318,115 @@ def render_crystallizers() -> None:
             operating_temperature_c=operating_temp,
         )
     )
-    st.json(asdict(result))
+    result_dict = asdict(result)
+    st.json(result_dict)
     _show_notes(result.notes)
+    _remember_case("crystallizers", {"feed_rate": feed_rate, "feed_rate_unit": feed_rate_unit, "feed_solids_wt_pct": feed_solids, "mother_liquor_solids_wt_pct": mother_liquor_solids, "target_slurry_solids_wt_pct": slurry_solids, "circulation": circulation, "circulation_unit": circulation_unit, "working_volume": working_volume, "working_volume_unit": working_volume_unit, "operating_temperature_c": operating_temp}, result_dict)
+
+
+
+def render_workbook_import() -> None:
+    st.header("Workbook Upload & Inspection")
+    uploaded = st.file_uploader("Upload an Excel workbook", type=["xlsx", "xlsm"])
+    if not uploaded:
+        st.info("Upload a workbook to inspect sheets, header candidates, classifications, and preview-normalized tables.")
+        return
+
+    suffix = Path(uploaded.name).suffix or ".xlsx"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+            handle.write(uploaded.getbuffer())
+            temp_path = Path(handle.name)
+
+        inspection = inspect_workbook(temp_path)
+        normalized = normalize_inspection(inspection)
+        st.subheader("Workbook source")
+        st.json(inspection.get("source", {}))
+
+        sheets_df = pd.DataFrame(
+            [
+                {
+                    "sheet_name": sheet.get("sheet_name"),
+                    "max_row": sheet.get("max_row"),
+                    "max_column": sheet.get("max_column"),
+                    "hidden": sheet.get("hidden"),
+                    "freeze_panes": sheet.get("freeze_panes"),
+                    "formula_cells": sheet.get("formula_cell_count"),
+                }
+                for sheet in inspection.get("sheet_previews", [])
+            ]
+        )
+        st.subheader("Sheet summary")
+        st.dataframe(sheets_df, use_container_width=True)
+
+        st.subheader("Sheet previews")
+        for sheet in inspection.get("sheet_previews", []):
+            with st.expander(sheet.get("sheet_name", "Sheet")):
+                st.json(sheet)
+
+        st.subheader("Preview-normalized tables")
+        if normalized:
+            for table in normalized:
+                with st.expander(f"{table['sheet_name']} ({table['classification']})"):
+                    st.json(table)
+        else:
+            st.info("No table-shaped normalized data was found in the sampled workbook rows.")
+
+        _remember_case("workbook-inspection", {"uploaded_filename": uploaded.name}, {"inspection": inspection, "normalized_tables": normalized})
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+
+def render_case_manager() -> None:
+    st.header("Case Manager")
+    latest = st.session_state.get("last_case_payload")
+    if latest:
+        st.subheader("Latest calculated case")
+        st.json(latest)
+        default_name = latest.get("page", "case")
+    else:
+        st.info("Run a calculator page first to populate a case payload, or save a manual JSON case below.")
+        default_name = "case"
+
+    with st.form("save_case_form"):
+        case_name = st.text_input("Case name", value=default_name)
+        description = st.text_input("Description", value="")
+        manual_json = st.text_area(
+            "Manual JSON payload override (optional)",
+            value=json.dumps(latest, indent=2) if latest else "{}",
+            height=250,
+        )
+        submitted = st.form_submit_button("Save case")
+        if submitted:
+            payload = json.loads(manual_json)
+            if description:
+                payload["description"] = description
+            path = CASE_STORE.save(case_name, payload)
+            st.success(f"Saved case to {path}")
+
+    st.subheader("Saved cases")
+    cases = CASE_STORE.list_cases()
+    if cases:
+        selected_name = st.selectbox("Select saved case", [case["name"] for case in cases])
+        selected_case = CASE_STORE.load(selected_name)
+        st.json(selected_case)
+    else:
+        st.info("No saved cases yet.")
 
 
 PAGES = {
     "Dashboard": render_dashboard,
     "Quick Tools": render_quick_tools,
     "Hydraulics": render_hydraulics,
+    "Steam Jets": render_steam_jets,
     "Steam & Utilities": render_steam,
     "Evaporators": render_evaporators,
     "Crystallizers": render_crystallizers,
+    "Workbook Import": render_workbook_import,
+    "Case Manager": render_case_manager,
 }
 
 with st.sidebar:
