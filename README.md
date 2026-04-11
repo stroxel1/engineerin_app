@@ -25,7 +25,7 @@ A practical process-engineering application for day-to-day plant work, focused o
 - `core/evaporators.py` — evaporator calculations
 - `core/crystallizers.py` — crystallizer calculations
 - `core/hydraulics.py` — pipe flow and TDH calculations
-- `core/steam.py` — steam duty and flash steam helpers
+- `core/steam.py` — steam duty, flash steam, and utility cost helpers
 - `core/tanks.py` — tank inventory / hold-up calculations
 - `core/thermal.py` — condensing/boiling temperature helpers
 - `core/quicktools.py` — engineer-facing wrappers
@@ -75,6 +75,8 @@ Default URL:
   - dilution water balance for syrup and liquor blend-back work
   - two-stream blend mixing for liquor, syrup, condensate, and water additions with blended solids, temperature, and downstream property screening
   - tank inventory / hold-up screening for vertical cylindrical, horizontal cylindrical, and rectangular tanks with optional density and transfer-rate based mass and residence-time checks
+  - utility cost screening for steam users and electric motors with hourly/daily/annual operating cost estimates
+  - current-vs-proposed utility comparison deltas with annual savings estimates for steam and electricity
 - Hydraulics
   - velocity
   - Reynolds number
@@ -127,5 +129,6 @@ Default URL:
 - The current tools are engineering screens, not rigorous design models.
 - Pressure is handled internally on an absolute kPa basis.
 - The engineering calculator pages now expose selectable units on inputs and displayed outputs.
+- Utility cost tools now include current-vs-proposed comparison screens so annual savings can be estimated directly in-app.
 - Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.
 - Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.

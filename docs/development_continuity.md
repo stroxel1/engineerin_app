@@ -9,7 +9,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `/Users/stephentroxel/Documents/projects/engineering_app`
 
 ## Current verified app URL
-- `http://127.0.0.1:8506`
+- `http://127.0.0.1:8507`
 
 ## Recent completed feature tranches
 1. Fresh engineering_app created in Documents/projects and initialized as git repo
@@ -37,6 +37,8 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 11. Quick tools expanded with blend, brix reconciliation, and tank inventory helpers.
 12. Hydraulics expanded further with parallel branch balancing and vessel/static-head screens.
 13. Dashboard and roadmap are now intended to stay updated with active work and completed items shown struck through in-app.
+14. Quick Tools expanded with utility cost screens for steam and electricity so plant issues can be translated into hourly/daily/annual operating-cost impact.
+15. Quick Tools utility cost work now includes current-vs-proposed delta screens with annual savings estimates for steam and electricity.
 
 ## Recent git commits
 - `7af1d88` Fix hydraulics page bottom rendering error
@@ -47,10 +49,11 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 
 ## Files most relevant right now
 - `web_app.py`
+- `core/steam.py`
+- `core/quicktools.py`
 - `core/hydraulics.py`
 - `core/citric_bpe.py`
 - `core/solutions.py`
-- `core/pipe_data.py`
 - `README.md`
 
 ## Current user preferences / constraints
@@ -65,11 +68,13 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - suction/discharge vessel modeling refinement
    - pump curve libraries or upload-based pump curves matched against system curves
    - optional balancing-valve/orifice coefficient sizing from the new self-balancing branch results
-2. Evaporators
+2. Quick tools
+   - ratio-target blend solving
+3. Evaporators
    - design-calibrated evaporator mode from workbook logic
-3. Steam jets
+4. Steam jets
    - import workbook-derived curve families and compare multiple models
-4. Crystallizers
+5. Crystallizers
    - stronger solubility / supersaturation correlations
 
 ## If resuming after disconnect

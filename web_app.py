@@ -35,9 +35,13 @@ from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLE
 from engineering_app.core.quicktools import (
     brix_reconciliation,
     dilution_water,
+    electricity_cost,
+    electricity_cost_comparison,
     flash_fraction,
     pressure_conversion,
     solution_properties,
+    steam_cost,
+    steam_cost_comparison,
     steam_for_duty,
     tank_inventory,
     temperature_conversion,
@@ -145,7 +149,7 @@ def render_dashboard() -> None:
     st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, solution properties, and workbook inspection.")
     cols = st.columns(6)
     cards = [
-        ("Quick tools", "Conversions, flash steam, blending, tank inventory, and Brix reconciliation"),
+        ("Quick tools", "Conversions, flash steam, blending, tank inventory, Brix reconciliation, and utility cost"),
         ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
         ("Hydraulics", "Line sizing, TDH, branches, vessels, valves, pump power, and NPSHa"),
         ("Steam jets", "Curve comparison and operating-point screening"),
@@ -176,13 +180,14 @@ def render_dashboard() -> None:
             ("done", "Control-valve sizing with cavitation/flashing screening"),
             ("done", "Pump/system curve overlay"),
             ("done", "Parallel branch and vessel/static-head screens"),
+            ("done", "Quick utility cost screens plus current-vs-proposed savings deltas for steam and electricity"),
         ])
 
 
 
 def render_quick_tools() -> None:
     st.header("Quick Tools")
-    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Tank Inventory"])
+    tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Tank Inventory", "Utility Cost"])
     product_options = list(PRODUCT_PROFILES.keys())
     product_labels = {key: PRODUCT_PROFILES[key].display_name for key in product_options}
 
@@ -586,6 +591,226 @@ def render_quick_tools() -> None:
             )
         except ValueError as exc:
             st.error(str(exc))
+
+    with tabs[9]:
+        st.caption("Estimate direct steam and motor/electric operating cost, then compare current vs proposed cases so troubleshooters can rank leaks, rerates, throttling losses, and optimization opportunities.")
+        utility_tabs = st.tabs(["Steam", "Electricity"])
+        steam_cost_basis_options = ["$/kg", "$/1000 kg", "$/lb", "$/1000 lb", "$/metric ton"]
+        motor_power_units = ["kW", "hp"]
+
+        with utility_tabs[0]:
+            steam_tabs = st.tabs(["Single case", "Current vs proposed"])
+
+            with steam_tabs[0]:
+                c1, c2, c3 = st.columns(3)
+                steam_flow_value = c1.number_input("Steam flow", min_value=0.0, value=8000.0, key="qt_utility_steam_flow")
+                steam_flow_unit = c2.selectbox("Steam flow unit", MASS_FLOW_UNITS, index=0, key="qt_utility_steam_flow_unit")
+                steam_cost_value = c3.number_input("Steam unit cost", min_value=0.0, value=18.0, key="qt_utility_steam_cost")
+                c4, c5, c6 = st.columns(3)
+                steam_cost_basis = c4.selectbox("Steam cost basis", steam_cost_basis_options, index=4, key="qt_utility_steam_cost_basis")
+                steam_hours_per_day = c5.number_input("Operating hours per day", min_value=0.0, max_value=24.0, value=24.0, key="qt_utility_steam_hours")
+                steam_days_per_year = c6.number_input("Operating days per year", min_value=0.0, max_value=366.0, value=350.0, key="qt_utility_steam_days")
+                output_flow_unit = st.selectbox("Steam flow output unit", MASS_FLOW_UNITS, index=0, key="qt_utility_steam_flow_out")
+                try:
+                    result = steam_cost(
+                        steam_flow_value=steam_flow_value,
+                        steam_flow_unit=steam_flow_unit,
+                        steam_cost_value=steam_cost_value,
+                        steam_cost_basis=steam_cost_basis,
+                        operating_hours_per_day=steam_hours_per_day,
+                        operating_days_per_year=steam_days_per_year,
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Hourly steam cost", f"${result.hourly_cost:,.2f}/h")
+                    m2.metric("Daily steam cost", f"${result.daily_cost:,.2f}/day")
+                    m3.metric("Annual steam cost", f"${result.annual_cost:,.0f}/yr")
+                    m4.metric("Annual steam use", f"{result.annual_steam_consumption_kg / 1000.0:,.1f} metric ton/yr")
+                    n1, n2, n3 = st.columns(3)
+                    n1.metric("Steam flow basis", f"{kg_h_to_mass_flow(result.steam_flow_kg_h, output_flow_unit):,.2f} {output_flow_unit}")
+                    n2.metric("Daily steam use", f"{result.daily_steam_consumption_kg / 1000.0:,.1f} metric ton/day")
+                    n3.metric("Unit steam cost", f"${result.steam_unit_cost_per_kg * 1000.0:,.2f}/metric ton")
+                    st.json(asdict(result))
+                    _show_notes(result.notes)
+                    _remember_case(
+                        "quick-tools-utility-cost-steam",
+                        {
+                            "steam_flow_value": steam_flow_value,
+                            "steam_flow_unit": steam_flow_unit,
+                            "steam_cost_value": steam_cost_value,
+                            "steam_cost_basis": steam_cost_basis,
+                            "operating_hours_per_day": steam_hours_per_day,
+                            "operating_days_per_year": steam_days_per_year,
+                        },
+                        asdict(result),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            with steam_tabs[1]:
+                st.caption("Use the same steam cost and operating schedule for current and proposed cases to estimate savings from leaks fixed, pressure optimization, or process improvements.")
+                s1, s2, s3 = st.columns(3)
+                current_steam_flow_value = s1.number_input("Current steam flow", min_value=0.0, value=8000.0, key="qt_utility_steam_cmp_current_flow")
+                proposed_steam_flow_value = s2.number_input("Proposed steam flow", min_value=0.0, value=6800.0, key="qt_utility_steam_cmp_proposed_flow")
+                steam_cmp_flow_unit = s3.selectbox("Steam flow unit", MASS_FLOW_UNITS, index=0, key="qt_utility_steam_cmp_flow_unit")
+                s4, s5, s6 = st.columns(3)
+                steam_cmp_cost_value = s4.number_input("Steam unit cost", min_value=0.0, value=18.0, key="qt_utility_steam_cmp_cost")
+                steam_cmp_cost_basis = s5.selectbox("Steam cost basis", steam_cost_basis_options, index=4, key="qt_utility_steam_cmp_cost_basis")
+                steam_cmp_output_flow_unit = s6.selectbox("Steam delta output unit", MASS_FLOW_UNITS, index=0, key="qt_utility_steam_cmp_flow_out")
+                s7, s8 = st.columns(2)
+                steam_cmp_hours = s7.number_input("Operating hours per day", min_value=0.0, max_value=24.0, value=24.0, key="qt_utility_steam_cmp_hours")
+                steam_cmp_days = s8.number_input("Operating days per year", min_value=0.0, max_value=366.0, value=350.0, key="qt_utility_steam_cmp_days")
+                try:
+                    result = steam_cost_comparison(
+                        current_steam_flow_value=current_steam_flow_value,
+                        proposed_steam_flow_value=proposed_steam_flow_value,
+                        steam_flow_unit=steam_cmp_flow_unit,
+                        steam_cost_value=steam_cmp_cost_value,
+                        steam_cost_basis=steam_cmp_cost_basis,
+                        operating_hours_per_day=steam_cmp_hours,
+                        operating_days_per_year=steam_cmp_days,
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Annual savings", f"${result.annual_cost_savings:,.0f}/yr")
+                    m2.metric("Hourly savings", f"${result.hourly_cost_savings:,.2f}/h")
+                    m3.metric("Annual steam reduction", f"{kg_h_to_mass_flow(result.annual_steam_savings_kg / max(steam_cmp_hours * steam_cmp_days, 1e-9), steam_cmp_output_flow_unit):,.2f} {steam_cmp_output_flow_unit} eqv")
+                    m4.metric("Annual steam saved", f"{result.annual_steam_savings_kg / 1000.0:,.1f} metric ton/yr")
+                    n1, n2, n3 = st.columns(3)
+                    n1.metric("Current annual cost", f"${result.current.annual_cost:,.0f}/yr")
+                    n2.metric("Proposed annual cost", f"${result.proposed.annual_cost:,.0f}/yr")
+                    n3.metric("Annual cost delta", f"${result.annual_cost_delta:,.0f}/yr")
+                    p1, p2, p3 = st.columns(3)
+                    p1.metric("Current steam flow", f"{kg_h_to_mass_flow(result.current.steam_flow_kg_h, steam_cmp_output_flow_unit):,.2f} {steam_cmp_output_flow_unit}")
+                    p2.metric("Proposed steam flow", f"{kg_h_to_mass_flow(result.proposed.steam_flow_kg_h, steam_cmp_output_flow_unit):,.2f} {steam_cmp_output_flow_unit}")
+                    p3.metric("Flow delta", f"{kg_h_to_mass_flow(result.proposed.steam_flow_kg_h - result.current.steam_flow_kg_h, steam_cmp_output_flow_unit):,.2f} {steam_cmp_output_flow_unit}")
+                    st.json(asdict(result))
+                    _show_notes(result.notes + result.current.notes + result.proposed.notes)
+                    _remember_case(
+                        "quick-tools-utility-cost-steam-comparison",
+                        {
+                            "current_steam_flow_value": current_steam_flow_value,
+                            "proposed_steam_flow_value": proposed_steam_flow_value,
+                            "steam_flow_unit": steam_cmp_flow_unit,
+                            "steam_cost_value": steam_cmp_cost_value,
+                            "steam_cost_basis": steam_cmp_cost_basis,
+                            "operating_hours_per_day": steam_cmp_hours,
+                            "operating_days_per_year": steam_cmp_days,
+                        },
+                        asdict(result),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+
+        with utility_tabs[1]:
+            elec_tabs = st.tabs(["Single case", "Current vs proposed"])
+
+            with elec_tabs[0]:
+                e1, e2, e3 = st.columns(3)
+                shaft_power_value = e1.number_input("Motor shaft / rated power", min_value=0.0, value=75.0, key="qt_utility_elec_power")
+                shaft_power_unit = e2.selectbox("Power unit", motor_power_units, index=0, key="qt_utility_elec_power_unit")
+                electricity_rate = e3.number_input("Electricity rate ($/kWh)", min_value=0.0, value=0.09, format="%.4f", key="qt_utility_elec_rate")
+                e4, e5, e6, e7 = st.columns(4)
+                load_pct = e4.number_input("Motor load (%)", min_value=0.0, max_value=100.0, value=85.0, key="qt_utility_elec_load")
+                motor_efficiency_pct = e5.number_input("Motor efficiency (%)", min_value=1.0, max_value=100.0, value=92.0, key="qt_utility_elec_eff")
+                elec_hours_per_day = e6.number_input("Operating hours per day", min_value=0.0, max_value=24.0, value=24.0, key="qt_utility_elec_hours")
+                elec_days_per_year = e7.number_input("Operating days per year", min_value=0.0, max_value=366.0, value=350.0, key="qt_utility_elec_days")
+                try:
+                    result = electricity_cost(
+                        shaft_power_value=shaft_power_value,
+                        shaft_power_unit=shaft_power_unit,
+                        electricity_rate_per_kwh=electricity_rate,
+                        load_pct=load_pct,
+                        motor_efficiency_pct=motor_efficiency_pct,
+                        operating_hours_per_day=elec_hours_per_day,
+                        operating_days_per_year=elec_days_per_year,
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Electrical input", f"{result.electric_input_kw:,.2f} kW")
+                    m2.metric("Hourly electricity cost", f"${result.hourly_cost:,.2f}/h")
+                    m3.metric("Daily electricity cost", f"${result.daily_cost:,.2f}/day")
+                    m4.metric("Annual electricity cost", f"${result.annual_cost:,.0f}/yr")
+                    n1, n2, n3 = st.columns(3)
+                    n1.metric("Shaft load basis", f"{result.shaft_power_kw * result.load_fraction:,.2f} kW")
+                    n2.metric("Daily energy", f"{result.daily_energy_kwh:,.1f} kWh/day")
+                    n3.metric("Annual energy", f"{result.annual_energy_kwh:,.0f} kWh/yr")
+                    st.json(asdict(result))
+                    _show_notes(result.notes)
+                    _remember_case(
+                        "quick-tools-utility-cost-electricity",
+                        {
+                            "shaft_power_value": shaft_power_value,
+                            "shaft_power_unit": shaft_power_unit,
+                            "electricity_rate_per_kwh": electricity_rate,
+                            "load_pct": load_pct,
+                            "motor_efficiency_pct": motor_efficiency_pct,
+                            "operating_hours_per_day": elec_hours_per_day,
+                            "operating_days_per_year": elec_days_per_year,
+                        },
+                        asdict(result),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            with elec_tabs[1]:
+                st.caption("Compare current and proposed motor/pump operating points at one electricity rate to estimate savings from trims, VFD changes, right-sizing, or efficiency upgrades.")
+                q1, q2, q3 = st.columns(3)
+                current_shaft_power_value = q1.number_input("Current shaft / rated power", min_value=0.0, value=75.0, key="qt_utility_elec_cmp_current_power")
+                proposed_shaft_power_value = q2.number_input("Proposed shaft / rated power", min_value=0.0, value=60.0, key="qt_utility_elec_cmp_proposed_power")
+                elec_cmp_power_unit = q3.selectbox("Power unit", motor_power_units, index=0, key="qt_utility_elec_cmp_power_unit")
+                q4, q5, q6 = st.columns(3)
+                electricity_cmp_rate = q4.number_input("Electricity rate ($/kWh)", min_value=0.0, value=0.09, format="%.4f", key="qt_utility_elec_cmp_rate")
+                elec_cmp_hours = q5.number_input("Operating hours per day", min_value=0.0, max_value=24.0, value=24.0, key="qt_utility_elec_cmp_hours")
+                elec_cmp_days = q6.number_input("Operating days per year", min_value=0.0, max_value=366.0, value=350.0, key="qt_utility_elec_cmp_days")
+                q7, q8, q9, q10 = st.columns(4)
+                current_load_pct = q7.number_input("Current motor load (%)", min_value=0.0, max_value=100.0, value=85.0, key="qt_utility_elec_cmp_current_load")
+                proposed_load_pct = q8.number_input("Proposed motor load (%)", min_value=0.0, max_value=100.0, value=78.0, key="qt_utility_elec_cmp_proposed_load")
+                current_motor_efficiency_pct = q9.number_input("Current motor efficiency (%)", min_value=1.0, max_value=100.0, value=92.0, key="qt_utility_elec_cmp_current_eff")
+                proposed_motor_efficiency_pct = q10.number_input("Proposed motor efficiency (%)", min_value=1.0, max_value=100.0, value=94.0, key="qt_utility_elec_cmp_proposed_eff")
+                try:
+                    result = electricity_cost_comparison(
+                        current_shaft_power_value=current_shaft_power_value,
+                        proposed_shaft_power_value=proposed_shaft_power_value,
+                        shaft_power_unit=elec_cmp_power_unit,
+                        electricity_rate_per_kwh=electricity_cmp_rate,
+                        current_load_pct=current_load_pct,
+                        proposed_load_pct=proposed_load_pct,
+                        current_motor_efficiency_pct=current_motor_efficiency_pct,
+                        proposed_motor_efficiency_pct=proposed_motor_efficiency_pct,
+                        operating_hours_per_day=elec_cmp_hours,
+                        operating_days_per_year=elec_cmp_days,
+                    )
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Annual savings", f"${result.annual_cost_savings:,.0f}/yr")
+                    m2.metric("Hourly savings", f"${result.hourly_cost_savings:,.2f}/h")
+                    m3.metric("Annual energy saved", f"{result.annual_energy_savings_kwh:,.0f} kWh/yr")
+                    m4.metric("Input power delta", f"{result.electric_input_kw_delta:,.2f} kW")
+                    n1, n2, n3 = st.columns(3)
+                    n1.metric("Current annual cost", f"${result.current.annual_cost:,.0f}/yr")
+                    n2.metric("Proposed annual cost", f"${result.proposed.annual_cost:,.0f}/yr")
+                    n3.metric("Annual cost delta", f"${result.annual_cost_delta:,.0f}/yr")
+                    p1, p2, p3 = st.columns(3)
+                    p1.metric("Current electrical input", f"{result.current.electric_input_kw:,.2f} kW")
+                    p2.metric("Proposed electrical input", f"{result.proposed.electric_input_kw:,.2f} kW")
+                    p3.metric("Annual energy delta", f"{result.annual_energy_delta_kwh:,.0f} kWh/yr")
+                    st.json(asdict(result))
+                    _show_notes(result.notes + result.current.notes + result.proposed.notes)
+                    _remember_case(
+                        "quick-tools-utility-cost-electricity-comparison",
+                        {
+                            "current_shaft_power_value": current_shaft_power_value,
+                            "proposed_shaft_power_value": proposed_shaft_power_value,
+                            "shaft_power_unit": elec_cmp_power_unit,
+                            "electricity_rate_per_kwh": electricity_cmp_rate,
+                            "current_load_pct": current_load_pct,
+                            "proposed_load_pct": proposed_load_pct,
+                            "current_motor_efficiency_pct": current_motor_efficiency_pct,
+                            "proposed_motor_efficiency_pct": proposed_motor_efficiency_pct,
+                            "operating_hours_per_day": elec_cmp_hours,
+                            "operating_days_per_year": elec_cmp_days,
+                        },
+                        asdict(result),
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
 
 
 
@@ -1523,7 +1748,7 @@ def render_roadmap() -> None:
         ("done", "Case manager added"),
         ("done", "Solution BPE tools added for citric, fructose, dextrose, and sucrose"),
         ("done", "Hydraulics core expanded with schedule 10S sizing, valves/fittings, TDH, pump power, NPSHa, segmented systems, control valves, pump/system curve, branch screens, and vessel head tools"),
-        ("done", "Quick tools expanded with blending, Brix reconciliation, and tank inventory"),
+        ("done", "Quick tools expanded with blending, Brix reconciliation, tank inventory, utility cost screens, and current-vs-proposed utility deltas"),
     ])
 
     st.subheader("Active work")
@@ -1538,7 +1763,7 @@ def render_roadmap() -> None:
         ("todo", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
         ("todo", "Evaporators: add design-calibrated evaporator mode from workbook logic"),
         ("todo", "Crystallizers: add stronger citric/fructose solubility and supersaturation screens"),
-        ("todo", "Quick tools: add utility cost estimate tools and ratio-target blend solving"),
+        ("todo", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
     ])
 
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")

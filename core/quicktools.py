@@ -9,7 +9,15 @@ from engineering_app.core.solutions import (
     calculate_two_stream_blend,
     estimate_solution_properties,
 )
-from engineering_app.core.steam import duty_from_steam_flow, flash_steam_fraction, steam_flow_for_duty_kw
+from engineering_app.core.steam import (
+    compare_electricity_costs,
+    compare_steam_costs,
+    duty_from_steam_flow,
+    estimate_electricity_cost,
+    estimate_steam_cost,
+    flash_steam_fraction,
+    steam_flow_for_duty_kw,
+)
 from engineering_app.core.tanks import estimate_tank_inventory_with_units
 from engineering_app.core.thermal import build_thermal_point
 from engineering_app.core.units import (
@@ -50,6 +58,90 @@ def duty_from_steam(steam_flow_value: float, steam_flow_unit: str, pressure_valu
 
 def flash_fraction(condensate_temp_c: float, flash_pressure_value: float, flash_pressure_unit: str, condensate_flow_kg_h: float = 1.0):
     return flash_steam_fraction(condensate_temp_c, flash_pressure_value, flash_pressure_unit, condensate_flow_kg_h)
+
+
+def steam_cost(
+    steam_flow_value: float,
+    steam_flow_unit: str,
+    steam_cost_value: float,
+    steam_cost_basis: str,
+    operating_hours_per_day: float = 24.0,
+    operating_days_per_year: float = 365.0,
+):
+    return estimate_steam_cost(
+        steam_flow_value=steam_flow_value,
+        steam_flow_unit=steam_flow_unit,
+        steam_cost_value=steam_cost_value,
+        steam_cost_basis=steam_cost_basis,
+        operating_hours_per_day=operating_hours_per_day,
+        operating_days_per_year=operating_days_per_year,
+    )
+
+
+def electricity_cost(
+    shaft_power_value: float,
+    shaft_power_unit: str,
+    electricity_rate_per_kwh: float,
+    load_pct: float = 100.0,
+    motor_efficiency_pct: float = 90.0,
+    operating_hours_per_day: float = 24.0,
+    operating_days_per_year: float = 365.0,
+):
+    return estimate_electricity_cost(
+        shaft_power_value=shaft_power_value,
+        shaft_power_unit=shaft_power_unit,
+        electricity_rate_per_kwh=electricity_rate_per_kwh,
+        load_pct=load_pct,
+        motor_efficiency_pct=motor_efficiency_pct,
+        operating_hours_per_day=operating_hours_per_day,
+        operating_days_per_year=operating_days_per_year,
+    )
+
+
+def steam_cost_comparison(
+    current_steam_flow_value: float,
+    proposed_steam_flow_value: float,
+    steam_flow_unit: str,
+    steam_cost_value: float,
+    steam_cost_basis: str,
+    operating_hours_per_day: float = 24.0,
+    operating_days_per_year: float = 365.0,
+):
+    return compare_steam_costs(
+        current_steam_flow_value=current_steam_flow_value,
+        proposed_steam_flow_value=proposed_steam_flow_value,
+        steam_flow_unit=steam_flow_unit,
+        steam_cost_value=steam_cost_value,
+        steam_cost_basis=steam_cost_basis,
+        operating_hours_per_day=operating_hours_per_day,
+        operating_days_per_year=operating_days_per_year,
+    )
+
+
+def electricity_cost_comparison(
+    current_shaft_power_value: float,
+    proposed_shaft_power_value: float,
+    shaft_power_unit: str,
+    electricity_rate_per_kwh: float,
+    current_load_pct: float = 100.0,
+    proposed_load_pct: float = 100.0,
+    current_motor_efficiency_pct: float = 90.0,
+    proposed_motor_efficiency_pct: float = 90.0,
+    operating_hours_per_day: float = 24.0,
+    operating_days_per_year: float = 365.0,
+):
+    return compare_electricity_costs(
+        current_shaft_power_value=current_shaft_power_value,
+        proposed_shaft_power_value=proposed_shaft_power_value,
+        shaft_power_unit=shaft_power_unit,
+        electricity_rate_per_kwh=electricity_rate_per_kwh,
+        current_load_pct=current_load_pct,
+        proposed_load_pct=proposed_load_pct,
+        current_motor_efficiency_pct=current_motor_efficiency_pct,
+        proposed_motor_efficiency_pct=proposed_motor_efficiency_pct,
+        operating_hours_per_day=operating_hours_per_day,
+        operating_days_per_year=operating_days_per_year,
+    )
 
 
 def solution_properties(
@@ -150,6 +242,10 @@ __all__ = [
     "steam_for_duty",
     "duty_from_steam",
     "flash_fraction",
+    "steam_cost",
+    "electricity_cost",
+    "steam_cost_comparison",
+    "electricity_cost_comparison",
     "solution_properties",
     "brix_reconciliation",
     "dilution_water",
