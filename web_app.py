@@ -754,8 +754,6 @@ def render_hydraulics() -> None:
         k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
         curve_points = build_system_curve(static_curve_head, k_factor, max_flow_curve)
         intersection = find_pump_system_intersection(shutoff_head, head_at_max_flow, max_flow_curve, static_curve_head, k_factor)
-        import pandas as pd
-        import plotly.graph_objects as go
         xs = [point.flow_m3_h for point in curve_points]
         system_heads = [point.total_dynamic_head_m for point in curve_points]
         pump_heads = [shutoff_head + (head_at_max_flow - shutoff_head) * (x / max_flow_curve) for x in xs]
