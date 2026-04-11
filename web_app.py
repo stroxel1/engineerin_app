@@ -69,6 +69,7 @@ from engineering_app.core.units import (
     kw_to_power,
     m3_h_to_volumetric_flow,
     pressure_to_kpa_abs,
+    volumetric_flow_to_m3_h,
     temperature_to_c,
     m3_to_volume,
     m_s_to_velocity,
