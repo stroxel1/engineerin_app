@@ -9,7 +9,8 @@ from engineering_app.core.pipe_data import get_common_fittings_map, get_schedule
 from engineering_app.core.units import length_to_m, pressure_to_kpa_abs, volumetric_flow_to_m3_h
 
 G = 9.80665
-ATM_KPA = 101.325
+PSI_PER_KPA = 0.1450377377
+GPM_PER_M3_H = 4.4028675
 
 
 @dataclass
@@ -105,6 +106,30 @@ class LineSizeRecommendation:
     pressure_drop_kpa: float
     total_dynamic_head_m: float
     reason: str
+
+
+@dataclass
+class ControlValveSizingResult:
+    flow_m3_h: float
+    flow_gpm: float
+    differential_pressure_kpa: float
+    differential_pressure_bar: float
+    differential_pressure_psi: float
+    specific_gravity: float
+    required_kv: float
+    required_cv: float
+    valve_authority: float | None
+    rated_cv: float | None
+    rated_kv: float | None
+    opening_fraction_linear: float | None
+    opening_fraction_equal_percentage: float | None
+    notes: list[str]
+
+
+@dataclass
+class SystemCurvePoint:
+    flow_m3_h: float
+    total_dynamic_head_m: float
 
 
 def _friction_factor_swamee_jain(reynolds_number: float, roughness_m: float, diameter_m: float) -> float:
@@ -349,3 +374,111 @@ def calculate_segmented_system(
         total_dynamic_head_m=total_tdh,
         notes=notes,
     )
+
+
+def size_control_valve(
+    flow_m3_h: float,
+    differential_pressure_kpa: float,
+    density_kg_m3: float,
+    installed_pressure_drop_kpa: float | None = None,
+    rated_cv: float | None = None,
+    equal_percentage_rangeability: float = 50.0,
+) -> ControlValveSizingResult:
+    if differential_pressure_kpa <= 0:
+        raise ValueError("Valve differential pressure must be positive.")
+    specific_gravity = density_kg_m3 / 1000.0
+    if specific_gravity <= 0:
+        raise ValueError("Density / specific gravity must be positive.")
+
+    flow_gpm = flow_m3_h * GPM_PER_M3_H
+    differential_pressure_psi = differential_pressure_kpa * PSI_PER_KPA
+    required_cv = flow_gpm * math.sqrt(specific_gravity / differential_pressure_psi)
+    required_kv = flow_m3_h * math.sqrt(specific_gravity / (differential_pressure_kpa / 100.0))
+
+    valve_authority = None
+    rated_kv = None
+    opening_linear = None
+    opening_equal_percentage = None
+    notes = [
+        "Liquid control-valve sizing uses the standard screening relationship Kv = Q × sqrt(SG / ΔPbar); Cv is reported in US gpm/psi form.",
+        "This is a practical incompressible-liquid screen only; cavitation/flashing and vendor recovery factors still need manufacturer review.",
+    ]
+
+    if installed_pressure_drop_kpa is not None and installed_pressure_drop_kpa >= 0:
+        denominator = differential_pressure_kpa + installed_pressure_drop_kpa
+        valve_authority = differential_pressure_kpa / denominator if denominator > 0 else None
+        if valve_authority is not None:
+            if valve_authority < 0.25:
+                notes.append("Valve authority is low; controllability may be poor unless more ΔP is assigned to the valve.")
+            elif valve_authority > 0.80:
+                notes.append("Valve takes most of the available drop; verify pump head and turndown flexibility.")
+
+    if rated_cv is not None:
+        if rated_cv <= 0:
+            raise ValueError("Rated Cv must be positive when provided.")
+        if equal_percentage_rangeability <= 1.0:
+            raise ValueError("Equal-percentage rangeability must be greater than 1.")
+        rated_kv = rated_cv / 1.1560992283536566
+        ratio = required_cv / rated_cv
+        opening_linear = ratio
+        opening_equal_percentage = math.log(1.0 + max(ratio, 0.0) * (equal_percentage_rangeability - 1.0)) / math.log(equal_percentage_rangeability)
+        if ratio > 1.0:
+            notes.append("Required Cv exceeds entered rated Cv; the valve would be undersized at the chosen ΔP.")
+        elif ratio < 0.1:
+            notes.append("Required Cv is well below the rated Cv; low-opening control stability may be weak.")
+
+    return ControlValveSizingResult(
+        flow_m3_h=flow_m3_h,
+        flow_gpm=flow_gpm,
+        differential_pressure_kpa=differential_pressure_kpa,
+        differential_pressure_bar=differential_pressure_kpa / 100.0,
+        differential_pressure_psi=differential_pressure_psi,
+        specific_gravity=specific_gravity,
+        required_kv=required_kv,
+        required_cv=required_cv,
+        valve_authority=valve_authority,
+        rated_cv=rated_cv,
+        rated_kv=rated_kv,
+        opening_fraction_linear=opening_linear,
+        opening_fraction_equal_percentage=opening_equal_percentage,
+        notes=notes,
+    )
+
+
+def build_system_curve(
+    static_head_m: float,
+    k_factor_m_per_m3h2: float,
+    max_flow_m3_h: float,
+    point_count: int = 20,
+) -> list[SystemCurvePoint]:
+    if max_flow_m3_h <= 0:
+        raise ValueError("Maximum flow must be positive")
+    points: list[SystemCurvePoint] = []
+    for index in range(point_count + 1):
+        flow = max_flow_m3_h * index / point_count
+        head = static_head_m + k_factor_m_per_m3h2 * flow * flow
+        points.append(SystemCurvePoint(flow_m3_h=flow, total_dynamic_head_m=head))
+    return points
+
+
+def find_pump_system_intersection(
+    shutoff_head_m: float,
+    head_at_max_flow_m: float,
+    max_flow_m3_h: float,
+    static_head_m: float,
+    k_factor_m_per_m3h2: float,
+) -> SystemCurvePoint | None:
+    if max_flow_m3_h <= 0:
+        return None
+    pump_slope = (head_at_max_flow_m - shutoff_head_m) / max_flow_m3_h
+    best_point = None
+    best_error = None
+    for step in range(1001):
+        flow = max_flow_m3_h * step / 1000.0
+        pump_head = shutoff_head_m + pump_slope * flow
+        system_head = static_head_m + k_factor_m_per_m3h2 * flow * flow
+        error = abs(pump_head - system_head)
+        if best_error is None or error < best_error:
+            best_error = error
+            best_point = SystemCurvePoint(flow_m3_h=flow, total_dynamic_head_m=system_head)
+    return best_point

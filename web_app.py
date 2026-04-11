@@ -17,14 +17,18 @@ from engineering_app.core.curves import evaluate_operating_point, make_curve_fro
 from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
 from engineering_app.core.hydraulics import (
     PipeSegment,
+    build_system_curve,
     calculate_hydraulics_with_units,
     calculate_pump_power,
     calculate_segmented_system,
     compare_schedule_10s_sizes,
     estimate_npsha,
+    find_pump_system_intersection,
     fitting_k_from_counts,
     recommend_schedule_10s_size,
+    size_control_valve,
 )
+
 from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
 from engineering_app.core.quicktools import (
     dilution_water,
@@ -322,10 +326,10 @@ def render_solution_bpe() -> None:
 
 def render_hydraulics() -> None:
     st.header("Hydraulics")
-    st.caption("Sized for plant line studies with stainless schedule 10S presets, fittings, TDH, pump power, NPSHa, and segment breakdowns.")
-    tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system"])
+    st.caption("Sized for plant line studies with stainless schedule 10S presets, fittings, TDH, pump power, NPSHa, segmented systems, and control-valve sizing.")
+    tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system", "Control valve", "Pump/System curve"])
 
-    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp, power_to_kw
+    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
 
     base1, base2, base3, base4 = st.columns(4)
     flow_value = base1.number_input("Flow", value=100.0, key="hyd_flow")
@@ -480,6 +484,90 @@ def render_hydraulics() -> None:
         st.metric("Segmented system ΔP", f"{seg_result.total_pressure_drop_kpa:,.2f} kPa")
         st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
         _show_notes(seg_result.notes)
+    with tabs[4]:
+        st.caption("Screen liquid control-valve sizing from line flow, density, and target valve pressure drop.")
+        c1, c2, c3 = st.columns(3)
+        valve_dp = c1.number_input("Target valve ΔP", min_value=0.01, value=max(result.pressure_drop_kpa * 0.35, 20.0), key="hyd_cv_dp")
+        valve_dp_unit = c2.selectbox("Valve ΔP unit", ("kPa", "psi", "bar"), index=0, key="hyd_cv_dp_unit")
+        rated_cv_enabled = c3.checkbox("Compare against rated Cv", value=True, key="hyd_cv_has_rated")
+        c4, c5 = st.columns(2)
+        rated_cv = c4.number_input("Rated Cv", min_value=0.01, value=90.0, key="hyd_cv_rated", disabled=not rated_cv_enabled)
+        other_losses_kpa = c5.number_input("Installed total losses incl. valve (kPa)", min_value=0.01, value=max(result.pressure_drop_kpa + valve_dp, valve_dp), key="hyd_cv_other_losses")
+        valve_dp_kpa = valve_dp if valve_dp_unit == "kPa" else (valve_dp / 0.1450377377 if valve_dp_unit == "psi" else valve_dp * 100.0)
+        valve = size_control_valve(
+            flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+            differential_pressure_kpa=valve_dp_kpa,
+            density_kg_m3=density_kg_m3,
+            installed_pressure_drop_kpa=other_losses_kpa,
+            rated_cv=rated_cv if rated_cv_enabled else None,
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Required Cv", f"{valve.required_cv:,.1f}")
+        m2.metric("Required Kv", f"{valve.required_kv:,.1f}")
+        m3.metric("Specific gravity", f"{valve.specific_gravity:,.3f}")
+        authority_display = f"{valve.valve_authority:,.2f}" if valve.valve_authority is not None else "n/a"
+        m4.metric("Valve authority", authority_display)
+        if rated_cv_enabled and valve.opening_fraction_linear is not None and valve.opening_fraction_equal_percentage is not None:
+            o1, o2, o3 = st.columns(3)
+            o1.metric("Rated Cv loading", f"{valve.required_cv / valve.rated_cv * 100.0:,.1f}%")
+            o2.metric("Linear trim opening", f"{valve.opening_fraction_linear * 100.0:,.1f}%")
+            o3.metric("Equal-% opening", f"{valve.opening_fraction_equal_percentage * 100.0:,.1f}%")
+        _show_notes(valve.notes)
+        st.json(asdict(valve))
+
+    with tabs[5]:
+        st.caption("Overlay a simple pump curve against the estimated system curve to visualize the operating point.")
+        p1, p2, p3 = st.columns(3)
+        shutoff_head = p1.number_input("Pump shutoff head (m)", min_value=0.1, value=max(result.total_dynamic_head_m * 1.6, 20.0), key="hyd_curve_shutoff")
+        max_flow_curve = p2.number_input("Pump max flow (m3/h)", min_value=1.0, value=max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 1.5, 10.0), key="hyd_curve_max_flow")
+        head_at_max_flow = p3.number_input("Pump head at max flow (m)", min_value=0.0, value=max(result.total_dynamic_head_m * 0.5, 1.0), key="hyd_curve_head_at_max")
+        static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head")
+        current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
+        k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
+        curve_points = build_system_curve(static_curve_head, k_factor, max_flow_curve)
+        intersection = find_pump_system_intersection(shutoff_head, head_at_max_flow, max_flow_curve, static_curve_head, k_factor)
+        import pandas as pd
+        import plotly.graph_objects as go
+        xs = [point.flow_m3_h for point in curve_points]
+        system_heads = [point.total_dynamic_head_m for point in curve_points]
+        pump_heads = [shutoff_head + (head_at_max_flow - shutoff_head) * (x / max_flow_curve) for x in xs]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
+        fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
+        if intersection is not None:
+            fig.add_trace(go.Scatter(x=[intersection.flow_m3_h], y=[intersection.total_dynamic_head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+            st.metric("Estimated operating flow", f"{intersection.flow_m3_h:,.1f} m3/h")
+            st.metric("Estimated operating head", f"{intersection.total_dynamic_head_m:,.2f} m")
+        fig.update_layout(title="Pump vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    _remember_case(
+        "hydraulics",
+        {
+            "flow_value": flow_value,
+            "flow_unit": flow_unit,
+            "density": density,
+            "density_unit": density_unit,
+            "viscosity": viscosity,
+            "viscosity_unit": viscosity_unit,
+            "pipe_basis": pipe_basis,
+            "pipe_id": pipe_id,
+            "pipe_id_unit": pipe_id_unit,
+            "pipe_length": pipe_length,
+            "pipe_length_unit": pipe_length_unit,
+            "elevation_change": elevation_change,
+            "elevation_unit": elevation_unit,
+            "fitting_k_total": fitting_k_total,
+        },
+        {
+            "single_line": asdict(result),
+            "size_recommendation": asdict(rec) if rec is not None else None,
+            "pump_power": asdict(pump_power),
+            "npsha": asdict(npsha),
+            "segmented_system": asdict(seg_result),
+            "control_valve": asdict(valve),
+        },
+    )
 
 
 
@@ -748,7 +836,7 @@ def render_roadmap() -> None:
     st.header("Roadmap")
     roadmap = [
         {"priority": 1, "area": "Solution BPE", "next_step": "Refine >60 DS citric estimation with better literature and extend stronger product-specific fructose/dextrose correlations."},
-        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch networks, control-valve Cv, and pump/system curve overlays."},
+        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch-network splitting/merging, cavitation-aware valve checks, and suction/discharge vessel modeling."},
         {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},

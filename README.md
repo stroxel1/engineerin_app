@@ -84,6 +84,9 @@ Default URL:
   - pump hydraulic/brake power
   - NPSHa screening
   - segmented suction/discharge system breakdowns
+  - control-valve Cv/Kv sizing
+  - pump vs system curve overlay
+  - liquid control-valve Cv/Kv sizing with valve-authority and trim-opening screening
 - Steam Jets
   - manual curve editor
   - operating-point screening vs curve
