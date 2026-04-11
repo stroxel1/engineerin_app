@@ -123,6 +123,16 @@ class ControlValveSizingResult:
     rated_kv: float | None
     opening_fraction_linear: float | None
     opening_fraction_equal_percentage: float | None
+    inlet_pressure_kpa_abs: float | None
+    outlet_pressure_kpa_abs: float | None
+    liquid_temperature_c: float | None
+    vapor_pressure_kpa_abs: float | None
+    pressure_recovery_factor_fl: float | None
+    predicted_vena_contracta_pressure_kpa_abs: float | None
+    liquid_critical_pressure_drop_kpa: float | None
+    cavitation_index_sigma: float | None
+    cavitation_status: str | None
+    outlet_flashing_expected: bool | None
     notes: list[str]
 
 
@@ -138,6 +148,10 @@ def _friction_factor_swamee_jain(reynolds_number: float, roughness_m: float, dia
     if reynolds_number < 2000:
         return 64.0 / reynolds_number
     return 0.25 / (math.log10(roughness_m / (3.7 * diameter_m) + 5.74 / (reynolds_number ** 0.9)) ** 2)
+
+
+def _water_vapor_pressure_kpa_abs(temperature_c: float) -> float:
+    return 0.611 * math.exp((17.27 * temperature_c) / (temperature_c + 237.3))
 
 
 def calculate_hydraulics(inputs: HydraulicInputs) -> HydraulicResult:
@@ -307,7 +321,7 @@ def estimate_npsha(
     density_kg_m3: float = 1000.0,
 ) -> NPSHAResult:
     surface_pressure_kpa_abs = pressure_to_kpa_abs(surface_pressure_value, surface_pressure_unit)
-    vapor_pressure_kpa_abs = 0.611 * math.exp((17.27 * liquid_temperature_c) / (liquid_temperature_c + 237.3))
+    vapor_pressure_kpa_abs = _water_vapor_pressure_kpa_abs(liquid_temperature_c)
     pressure_head_m = surface_pressure_kpa_abs * 1000.0 / (density_kg_m3 * G)
     vapor_head_m = vapor_pressure_kpa_abs * 1000.0 / (density_kg_m3 * G)
     velocity_head_m = velocity_m_s ** 2 / (2.0 * G)
@@ -383,12 +397,18 @@ def size_control_valve(
     installed_pressure_drop_kpa: float | None = None,
     rated_cv: float | None = None,
     equal_percentage_rangeability: float = 50.0,
+    inlet_pressure_value: float | None = None,
+    inlet_pressure_unit: str = "kPa",
+    liquid_temperature_c: float | None = None,
+    pressure_recovery_factor_fl: float | None = None,
 ) -> ControlValveSizingResult:
     if differential_pressure_kpa <= 0:
         raise ValueError("Valve differential pressure must be positive.")
     specific_gravity = density_kg_m3 / 1000.0
     if specific_gravity <= 0:
         raise ValueError("Density / specific gravity must be positive.")
+    if pressure_recovery_factor_fl is not None and not (0.0 < pressure_recovery_factor_fl <= 1.0):
+        raise ValueError("Pressure recovery factor FL must be between 0 and 1.")
 
     flow_gpm = flow_m3_h * GPM_PER_M3_H
     differential_pressure_psi = differential_pressure_kpa * PSI_PER_KPA
@@ -399,9 +419,17 @@ def size_control_valve(
     rated_kv = None
     opening_linear = None
     opening_equal_percentage = None
+    inlet_pressure_kpa_abs = None
+    outlet_pressure_kpa_abs = None
+    vapor_pressure_kpa_abs = None
+    predicted_vena_contracta_pressure_kpa_abs = None
+    liquid_critical_pressure_drop_kpa = None
+    cavitation_index_sigma = None
+    cavitation_status = None
+    outlet_flashing_expected = None
     notes = [
         "Liquid control-valve sizing uses the standard screening relationship Kv = Q × sqrt(SG / ΔPbar); Cv is reported in US gpm/psi form.",
-        "This is a practical incompressible-liquid screen only; cavitation/flashing and vendor recovery factors still need manufacturer review.",
+        "Cavitation/flashing checks are screening estimates only; confirm with vendor liquid-pressure-recovery data before final valve selection.",
     ]
 
     if installed_pressure_drop_kpa is not None and installed_pressure_drop_kpa >= 0:
@@ -427,6 +455,39 @@ def size_control_valve(
         elif ratio < 0.1:
             notes.append("Required Cv is well below the rated Cv; low-opening control stability may be weak.")
 
+    if inlet_pressure_value is not None:
+        inlet_pressure_kpa_abs = pressure_to_kpa_abs(inlet_pressure_value, inlet_pressure_unit)
+        outlet_pressure_kpa_abs = inlet_pressure_kpa_abs - differential_pressure_kpa
+        if outlet_pressure_kpa_abs <= 0.0:
+            notes.append("Outlet pressure fell to zero/negative absolute pressure in the screen; recheck inlet pressure basis and valve ΔP.")
+        if liquid_temperature_c is not None:
+            vapor_pressure_kpa_abs = _water_vapor_pressure_kpa_abs(liquid_temperature_c)
+            cavitation_index_sigma = (inlet_pressure_kpa_abs - vapor_pressure_kpa_abs) / max(differential_pressure_kpa, 1e-9)
+            outlet_flashing_expected = outlet_pressure_kpa_abs <= vapor_pressure_kpa_abs
+            if pressure_recovery_factor_fl is not None:
+                liquid_critical_pressure_drop_kpa = max((pressure_recovery_factor_fl ** 2) * (inlet_pressure_kpa_abs - vapor_pressure_kpa_abs), 0.0)
+                predicted_vena_contracta_pressure_kpa_abs = inlet_pressure_kpa_abs - differential_pressure_kpa / max(pressure_recovery_factor_fl ** 2, 1e-9)
+            if outlet_flashing_expected:
+                cavitation_status = "flashing_expected"
+                notes.append("Estimated valve outlet pressure is at/below the liquid vapor pressure; flashing is expected downstream of the trim.")
+            elif liquid_critical_pressure_drop_kpa is not None and differential_pressure_kpa >= liquid_critical_pressure_drop_kpa:
+                cavitation_status = "critical_cavitation_risk"
+                notes.append("Entered valve ΔP meets/exceeds the FL-based liquid critical drop screen; severe cavitation or choked-liquid behavior is likely.")
+            elif cavitation_index_sigma <= 1.5:
+                cavitation_status = "high_cavitation_risk"
+                notes.append("Low cavitation index indicates high cavitation risk; hot liquid, low outlet pressure, or a higher-recovery trim would worsen this case.")
+            elif cavitation_index_sigma <= 2.0:
+                cavitation_status = "moderate_cavitation_risk"
+                notes.append("Cavitation index is in a watch range; check valve style, trim, noise, and vendor recovery-factor data.")
+            else:
+                cavitation_status = "low_cavitation_risk"
+                notes.append("Outlet pressure remains comfortably above vapor pressure in this screening check, so cavitation risk appears lower.")
+            notes.append("Heuristic cavitation index uses σ = (P1 - Pv) / (P1 - P2) on an absolute-pressure basis.")
+        elif inlet_pressure_kpa_abs is not None:
+            notes.append("Add liquid temperature to enable vapor-pressure, flashing, and cavitation-risk screening.")
+    elif liquid_temperature_c is not None:
+        notes.append("Add inlet pressure to enable outlet-pressure, flashing, and cavitation-risk screening.")
+
     return ControlValveSizingResult(
         flow_m3_h=flow_m3_h,
         flow_gpm=flow_gpm,
@@ -441,6 +502,16 @@ def size_control_valve(
         rated_kv=rated_kv,
         opening_fraction_linear=opening_linear,
         opening_fraction_equal_percentage=opening_equal_percentage,
+        inlet_pressure_kpa_abs=inlet_pressure_kpa_abs,
+        outlet_pressure_kpa_abs=outlet_pressure_kpa_abs,
+        liquid_temperature_c=liquid_temperature_c,
+        vapor_pressure_kpa_abs=vapor_pressure_kpa_abs,
+        pressure_recovery_factor_fl=pressure_recovery_factor_fl,
+        predicted_vena_contracta_pressure_kpa_abs=predicted_vena_contracta_pressure_kpa_abs,
+        liquid_critical_pressure_drop_kpa=liquid_critical_pressure_drop_kpa,
+        cavitation_index_sigma=cavitation_index_sigma,
+        cavitation_status=cavitation_status,
+        outlet_flashing_expected=outlet_flashing_expected,
         notes=notes,
     )
 

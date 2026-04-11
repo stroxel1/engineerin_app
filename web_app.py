@@ -63,6 +63,8 @@ from engineering_app.core.units import (
     kpa_abs_to_pressure,
     kw_to_power,
     m3_h_to_volumetric_flow,
+    pressure_to_kpa_abs,
+    temperature_to_c,
     m3_to_volume,
     m_s_to_velocity,
     m_to_length,
@@ -485,21 +487,37 @@ def render_hydraulics() -> None:
         st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
         _show_notes(seg_result.notes)
     with tabs[4]:
-        st.caption("Screen liquid control-valve sizing from line flow, density, and target valve pressure drop.")
+        st.caption("Screen liquid control-valve sizing from line flow, density, and target valve pressure drop, then add cavitation/flashing checks from inlet pressure, liquid temperature, and FL.")
         c1, c2, c3 = st.columns(3)
         valve_dp = c1.number_input("Target valve ΔP", min_value=0.01, value=max(result.pressure_drop_kpa * 0.35, 20.0), key="hyd_cv_dp")
         valve_dp_unit = c2.selectbox("Valve ΔP unit", ("kPa", "psi", "bar"), index=0, key="hyd_cv_dp_unit")
         rated_cv_enabled = c3.checkbox("Compare against rated Cv", value=True, key="hyd_cv_has_rated")
+        valve_dp_kpa = valve_dp if valve_dp_unit == "kPa" else (valve_dp / 0.1450377377 if valve_dp_unit == "psi" else valve_dp * 100.0)
         c4, c5 = st.columns(2)
         rated_cv = c4.number_input("Rated Cv", min_value=0.01, value=90.0, key="hyd_cv_rated", disabled=not rated_cv_enabled)
-        other_losses_kpa = c5.number_input("Installed total losses incl. valve (kPa)", min_value=0.01, value=max(result.pressure_drop_kpa + valve_dp, valve_dp), key="hyd_cv_other_losses")
-        valve_dp_kpa = valve_dp if valve_dp_unit == "kPa" else (valve_dp / 0.1450377377 if valve_dp_unit == "psi" else valve_dp * 100.0)
+        other_losses_kpa = c5.number_input("Installed other losses excl. valve (kPa)", min_value=0.0, value=max(result.pressure_drop_kpa, 0.0), key="hyd_cv_other_losses")
+
+        st.markdown("**Cavitation / flashing screen**")
+        q1, q2, q3, q4 = st.columns(4)
+        inlet_pressure_value = q1.number_input("Valve inlet pressure", min_value=0.01, value=max(pressure_to_kpa_abs(35.0, "psig"), valve_dp_kpa + 50.0), key="hyd_cv_inlet_pressure")
+        inlet_pressure_unit = q2.selectbox("Inlet pressure unit", PRESSURE_UNITS, index=0, key="hyd_cv_inlet_pressure_unit")
+        liquid_temp_value = q3.number_input("Liquid temperature", value=80.0, key="hyd_cv_liquid_temp")
+        liquid_temp_unit = q4.selectbox("Liquid temperature unit", TEMPERATURE_UNITS, index=0, key="hyd_cv_liquid_temp_unit")
+        q5, q6 = st.columns(2)
+        pressure_recovery_factor_fl = q5.number_input("Valve FL (pressure recovery factor)", min_value=0.10, max_value=1.00, value=0.90, step=0.01, key="hyd_cv_fl")
+        q6.caption("Typical screening starting points: globe ~0.9, rotary/high-recovery trims lower. Confirm with the vendor for the actual trim.")
+        liquid_temp_c = temperature_to_c(liquid_temp_value, liquid_temp_unit)
+
         valve = size_control_valve(
             flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
             differential_pressure_kpa=valve_dp_kpa,
             density_kg_m3=density_kg_m3,
             installed_pressure_drop_kpa=other_losses_kpa,
             rated_cv=rated_cv if rated_cv_enabled else None,
+            inlet_pressure_value=inlet_pressure_value,
+            inlet_pressure_unit=inlet_pressure_unit,
+            liquid_temperature_c=liquid_temp_c,
+            pressure_recovery_factor_fl=pressure_recovery_factor_fl,
         )
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Required Cv", f"{valve.required_cv:,.1f}")
@@ -512,6 +530,16 @@ def render_hydraulics() -> None:
             o1.metric("Rated Cv loading", f"{valve.required_cv / valve.rated_cv * 100.0:,.1f}%")
             o2.metric("Linear trim opening", f"{valve.opening_fraction_linear * 100.0:,.1f}%")
             o3.metric("Equal-% opening", f"{valve.opening_fraction_equal_percentage * 100.0:,.1f}%")
+
+        cstat1, cstat2, cstat3, cstat4 = st.columns(4)
+        cstat1.metric("Outlet pressure", f"{kpa_abs_to_pressure(valve.outlet_pressure_kpa_abs, inlet_pressure_unit):,.2f} {inlet_pressure_unit}" if valve.outlet_pressure_kpa_abs is not None else "n/a")
+        cstat2.metric("Vapor pressure", f"{kpa_abs_to_pressure(valve.vapor_pressure_kpa_abs, 'kPa'):,.2f} kPa" if valve.vapor_pressure_kpa_abs is not None else "n/a")
+        cstat3.metric("Cavitation index σ", f"{valve.cavitation_index_sigma:,.2f}" if valve.cavitation_index_sigma is not None else "n/a")
+        cstat4.metric("Status", (valve.cavitation_status or "n/a").replace("_", " ").title())
+        if valve.liquid_critical_pressure_drop_kpa is not None:
+            d1, d2 = st.columns(2)
+            d1.metric("FL-based critical ΔP", f"{_pressure_delta_from_kpa(valve.liquid_critical_pressure_drop_kpa, valve_dp_unit):,.2f} {valve_dp_unit}")
+            d2.metric("Predicted vena-contracta pressure", f"{valve.predicted_vena_contracta_pressure_kpa_abs:,.2f} kPa abs" if valve.predicted_vena_contracta_pressure_kpa_abs is not None else "n/a")
         _show_notes(valve.notes)
         st.json(asdict(valve))
 
@@ -1048,7 +1076,7 @@ def render_roadmap() -> None:
     st.header("Roadmap")
     roadmap = [
         {"priority": 1, "area": "Solution BPE", "next_step": "Refine >60 DS citric estimation with better literature and extend stronger product-specific fructose/dextrose correlations."},
-        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch-network splitting/merging, cavitation-aware valve checks, and suction/discharge vessel modeling."},
+        {"priority": 2, "area": "Hydraulics", "next_step": "Add branch-network splitting/merging, suction/discharge vessel modeling, and vendor-curve-ready anti-cavitation trim comparisons."},
         {"priority": 3, "area": "Steam jets", "next_step": "Import workbook-derived curve families and compare multiple models side-by-side."},
         {"priority": 4, "area": "Evaporators", "next_step": "Add design-calibrated evaporator mode using workbook logic without requiring plant DS back-calcs."},
         {"priority": 5, "area": "Crystallizers", "next_step": "Add citric/fructose solubility correlations and supersaturation screens."},
