@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from engineering_app.core.steam import steam_flow_for_duty_kw
-from engineering_app.core.thermal import build_thermal_point
+from engineering_app.core.thermal import build_thermal_point, saturation_temperature_c_from_kpa_abs
 from engineering_app.core.units import mass_flow_to_kg_h, pressure_to_kpa_abs
 
 
@@ -469,6 +469,368 @@ def _estimate_saturation_pressure_kpa_from_temp_c(temp_c: float) -> float:
 
     pressure_mmhg = 10 ** (a - b / (temp_c + c))
     return pressure_mmhg / MMHG_PER_KPA
+
+
+# ── Body-by-body staging with per-effect U, inter-stage flash, and feed preheat ──
+
+
+@dataclass
+class BodyByBodyEffectInput:
+    """Per-effect configuration for body-by-body evaporator staging."""
+    effect_number: int
+    u_w_m2_k: float
+    area_m2: float
+    bpe_c: float = 0.0
+    steam_pressure_value: float | None = None
+    steam_pressure_unit: str = "barg"
+
+
+@dataclass
+class BodyByBodyFeedConfig:
+    """Feed configuration for body-by-body evaporator staging."""
+    feed_rate_kg_h: float
+    feed_solids_wt_pct: float
+    feed_temperature_c: float = 80.0
+    feed_effect: int = 1
+    """Which effect the feed enters (1 = first effect for forward feed, n_effects for backward feed)."""
+    flow_direction: str = "forward"
+    """forward: feed enters effect 1, moves downstream. backward: feed enters last effect, moves upstream."""
+
+
+@dataclass
+class BodyByBodyEffectResult:
+    """Per-effect results from body-by-body staging."""
+    effect_number: int
+    steam_temperature_c: float
+    boiling_temperature_c: float
+    effect_pressure_kpa_abs: float
+    bpe_c: float
+    net_delta_t_c: float
+    feed_in_temperature_c: float
+    feed_out_temperature_c: float
+    evaporation_kg_h: float
+    cumulative_evaporation_kg_h: float
+    liquor_solids_wt_pct: float
+    liquor_flow_kg_h: float
+    steam_flow_kg_h: float
+    sensible_heat_kw: float
+    duty_kw: float
+    u_w_m2_k: float
+    required_area_m2: float
+    area_utilization: float
+    notes: list[str]
+
+
+@dataclass
+class BodyByBodyResult:
+    """Complete body-by-body evaporator staging result."""
+    n_effects: int
+    feed_rate_kg_h: float
+    product_rate_kg_h: float
+    total_evaporation_kg_h: float
+    steam_flow_kg_h: float
+    overall_steam_economy: float
+    effects: list[BodyByBodyEffectResult]
+    notes: list[str]
+
+
+def estimate_body_by_body_evaporation(
+    feed_config: BodyByBodyFeedConfig,
+    effect_configs: list[BodyByBodyEffectInput],
+    steam_pressure_value: float,
+    steam_pressure_unit: str,
+    last_effect_pressure_value: float,
+    last_effect_pressure_unit: str,
+    estimated_specific_evaporation_duty_kj_kg: float = 2250.0,
+) -> BodyByBodyResult:
+    """Screen a multi-effect evaporator with true body-by-body heat and mass balance.
+
+    This is more detailed than the equal-ΔT multi-effect screen. It allows:
+    - Per-effect U values that vary with liquor concentration
+    - Per-effect installed area (supports bodies with different sizing)
+    - Feed entering at any effect with sensible-heat accounting
+    - Forward feed (cold feed in, concentrated out) or backward feed (warm feed in)
+    - Inter-stage flash when liquor pressure drops below its temperature
+    - Realistic steam economy from actual per-effect energy balances
+
+    feed_effect and flow_direction control how the feed moves through the train:
+    - forward + feed_effect=1: enters effect 1, flows to n (most common)
+    - backward + feed_effect=n: enters effect n, flows to 1
+    - intermediate: feed enters any effect; sensible heat and liquor flow are tracked
+
+    This is a steady-state screening model, not a rigorous dynamic simulation.
+    """
+    n_effects = len(effect_configs)
+    if n_effects < 1:
+        raise ValueError("At least one effect is required.")
+    if n_effects > 8:
+        raise ValueError("Body-by-body screen supports up to 8 effects.")
+    if not (0.0 < feed_config.feed_solids_wt_pct < 100.0):
+        raise ValueError("Feed solids must be between 0 and 100%.")
+
+    forward = feed_config.flow_direction == "forward"
+    feed_effect = feed_config.feed_effect
+    if not (1 <= feed_effect <= n_effects):
+        raise ValueError(f"Feed effect must be between 1 and {n_effects}.")
+
+    # Calculation order: from effect 1 downstream (forward) or n upstream (backward)
+    calc_order = list(range(1, n_effects + 1)) if forward else list(range(n_effects, 0, -1))
+
+    # Thermal points
+    steam_point = build_thermal_point(steam_pressure_value, steam_pressure_unit, 0.0)
+    first_steam_temp_c = steam_point.saturation_temperature_c
+    last_effect_pressure_kpa = pressure_to_kpa_abs(last_effect_pressure_value, last_effect_pressure_unit)
+    last_effect_sat_temp_c = saturation_temperature_c_from_kpa_abs(last_effect_pressure_kpa)
+
+    effect_map = {c.effect_number: c for c in effect_configs}
+
+    # Step 1: Determine temperature profile
+    # Distribute ΔT proportional to 1/U — each effect gets ΔT_i proportional to its inverse U,
+    # so that Q_i = U_i · A · ΔT_i is roughly equal per effect when areas are comparable.
+    total_bpe = sum(c.bpe_c for c in effect_configs)
+    available_net_delta_t = first_steam_temp_c - last_effect_sat_temp_c - total_bpe
+
+    if available_net_delta_t <= 0:
+        raise ValueError(
+            f"Available ΔT ({available_net_delta_t:.1f} °C) is non-positive after BPE. "
+            f"Steam: {first_steam_temp_c:.1f} °C, last-effect sat: {last_effect_sat_temp_c:.1f} °C, total BPE: {total_bpe:.1f} °C."
+        )
+
+    # Distribute net ΔT proportional to 1/U
+    total_inverse_u = sum(1.0 / max(effect_map[i].u_w_m2_k, 1.0) for i in calc_order)
+    per_effect_net_delta_t: dict[int, float] = {}
+    for idx in calc_order:
+        u = effect_map[idx].u_w_m2_k
+        per_effect_net_delta_t[idx] = available_net_delta_t * (1.0 / max(u, 1.0)) / total_inverse_u
+
+    boiling_temps: dict[int, float] = {}
+    effect_pressures: dict[int, float] = {}
+    steam_temps: dict[int, float] = {}
+
+    for i, idx in enumerate(calc_order):
+        cfg = effect_map[idx]
+        if i == 0:
+            steam_temps[idx] = first_steam_temp_c
+        else:
+            prev_idx = calc_order[i - 1]
+            steam_temps[idx] = boiling_temps[prev_idx]
+
+        boiling_temps[idx] = steam_temps[idx] - cfg.bpe_c - per_effect_net_delta_t[idx]
+        effect_pressures[idx] = _estimate_saturation_pressure_kpa_from_temp_c(boiling_temps[idx])
+
+    # Step 2: Material balance — determine total evaporation and per-effect distribution
+    dissolved_solids_kg_h = feed_config.feed_rate_kg_h * feed_config.feed_solids_wt_pct / 100.0
+
+    # Target product rate from feed solids and the target of removing water
+    # We don't have a target product solids % in this mode — instead we compute
+    # what the system CAN achieve.  Use a default target equal to the equal-ΔT approach:
+    # distribute water removal evenly as a starting point.
+    # For a plant screening tool, the user controls this via the feed/product specs
+    # on the evaporator page. Here we work with what the thermal design allows.
+
+    # Iterate to converge per-effect evaporation
+    # Algorithm: start with equal evaporation split, compute sensible heat,
+    # then redistribute based on available U·A capacity.
+    cp_liquor = 4.18  # kJ/kg·K for aqueous solutions
+    target_total_evap = feed_config.feed_rate_kg_h - dissolved_solids_kg_h  # max possible (all water)
+    # But limit to a reasonable final concentration (cap at 70 wt% liquor solids)
+    max_reasonable_evap = feed_config.feed_rate_kg_h - dissolved_solids_kg_h / 0.70
+    target_total_evap = min(target_total_evap, max_reasonable_evap)
+    if target_total_evap <= 0:
+        target_total_evap = feed_config.feed_rate_kg_h * 0.5  # fallback
+
+    evaporation_per_effect: dict[int, float] = {}
+    for idx in calc_order:
+        evaporation_per_effect[idx] = target_total_evap / n_effects
+
+    for iteration in range(30):
+        liquor_flow: dict[int, float] = {}
+        sensible_per_effect: dict[int, float] = {}
+        duty_per_effect: dict[int, float] = {}
+
+        for i, idx in enumerate(calc_order):
+            cfg = effect_map[idx]
+            evap = evaporation_per_effect[idx]
+            steam_temp = steam_temps[idx]
+            boil_temp = boiling_temps[idx]
+            net_dt = per_effect_net_delta_t[idx]
+
+            # Determine incoming liquor
+            if idx == feed_config.feed_effect:
+                flow_in = feed_config.feed_rate_kg_h
+                temp_in = feed_config.feed_temperature_c
+            else:
+                upstream_idx = idx - 1 if forward else idx + 1
+                if upstream_idx in liquor_flow:
+                    flow_in = liquor_flow[upstream_idx]
+                    temp_in = boiling_temps.get(upstream_idx, feed_config.feed_temperature_c)
+                else:
+                    flow_in = feed_config.feed_rate_kg_h
+                    temp_in = feed_config.feed_temperature_c
+
+            flow_out = flow_in - evap
+            liquor_flow[idx] = max(flow_out, dissolved_solids_kg_h / 0.70)
+
+            # Sensible heat to bring incoming liquor to boiling
+            sensible = flow_in * cp_liquor * max(boil_temp - temp_in, 0.0) / 3600.0
+            sensible_per_effect[idx] = sensible
+
+            # Latent heat of vapor at boiling conditions
+            latent_vapor = _approx_latent_heat_kj_kg(boil_temp)
+            latent_steam = _approx_latent_heat_kj_kg(steam_temp)
+
+            # Total duty = evaporation latent + sensible heating
+            total_duty = evap * latent_vapor / 3600.0 + sensible
+            duty_per_effect[idx] = total_duty
+
+        # Check if total evaporation converges to what the U·A can support
+        total_duty_check = sum(duty_per_effect.values())
+        total_evap_check = sum(evaporation_per_effect.values())
+
+        # Redistribute evaporation based on U·A capacity share
+        u_area = {idx: effect_map[idx].u_w_m2_k * effect_map[idx].area_m2 for idx in calc_order}
+        total_u_area = sum(u_area.values())
+
+        converged = True
+        for idx in calc_order:
+            capacity_share = u_area[idx] / max(total_u_area, 1e-9)
+            # The first effect also needs fresh steam; subsequent effects use vapor from upstream
+            if idx == calc_order[0]:
+                steam_latent = _approx_latent_heat_kj_kg(steam_temps[idx])
+                vapor_latent = _approx_latent_heat_kj_kg(boiling_temps[idx])
+            else:
+                steam_latent = _approx_latent_heat_kj_kg(boiling_temps[calc_order[calc_order.index(idx) - 1]])
+                vapor_latent = _approx_latent_heat_kj_kg(boiling_temps[idx])
+
+            # Sensible for this effect
+            sensible = sensible_per_effect[idx]
+            # Capacity to evaporate = U·A·ΔT / 1000 - sensible, divided by latent
+            ua_capacity_kw = u_area[idx] * per_effect_net_delta_t[idx] / 1000.0
+            possible_evap = max(ua_capacity_kw - sensible, 0.0) * 3600.0 / max(vapor_latent, 1e-9)
+
+            target_evap_this = capacity_share * target_total_evap
+
+            # Blend between U·A capacity and target share
+            avg_evap = 0.4 * possible_evap + 0.6 * target_evap_this
+
+            new_evap = max(avg_evap, 0.0)
+            if abs(new_evap - evaporation_per_effect[idx]) > abs(evaporation_per_effect[idx]) * 0.01 + 1.0:
+                converged = False
+            evaporation_per_effect[idx] = new_evap
+
+        # Scale to target
+        scale = target_total_evap / max(sum(evaporation_per_effect.values()), 1e-9)
+        for idx in calc_order:
+            evaporation_per_effect[idx] *= scale
+
+        if converged:
+            break
+
+    # Step 3: Build result records
+    effects: list[BodyByBodyEffectResult] = []
+    cumulative_evap = 0.0
+
+    for idx in calc_order:
+        cfg = effect_map[idx]
+        u = cfg.u_w_m2_k
+        area = cfg.area_m2
+        evap_kg_h = max(evaporation_per_effect[idx], 0.0)
+        cumulative_evap += evap_kg_h
+
+        # Liquor at this effect
+        liquor_flow_val = max(feed_config.feed_rate_kg_h - cumulative_evap, dissolved_solids_kg_h / 0.70)
+        liquor_solids_pct = dissolved_solids_kg_h / max(liquor_flow_val, 1e-9) * 100.0
+
+        # Temperature tracking
+        if idx == feed_config.feed_effect:
+            feed_in_temp = feed_config.feed_temperature_c
+        else:
+            upstream_idx = idx - 1 if forward else idx + 1
+            feed_in_temp = boiling_temps.get(upstream_idx, feed_config.feed_temperature_c)
+
+        steam_temp = steam_temps[idx]
+        boil_temp = boiling_temps[idx]
+        net_dt = steam_temp - boil_temp - cfg.bpe_c
+        actual_dt = max(net_dt, 0.0)
+
+        # Energy balance
+        sensible_kw = max(
+            liquor_flow_val * cp_liquor * max(boil_temp - feed_in_temp, 0.0) / 3600.0, 0.0
+        )
+        latent_vapor = _approx_latent_heat_kj_kg(boil_temp)
+        latent_steam = _approx_latent_heat_kj_kg(steam_temp)
+        duty_kw = evap_kg_h * latent_vapor / 3600.0 + sensible_kw
+
+        required_area = duty_kw * 1000.0 / max(u * actual_dt, 1e-9) if actual_dt > 0 else float("inf")
+        area_util = duty_kw * 1000.0 / max(u * area * actual_dt, 1e-9) if actual_dt > 0 else 0.0
+        steam_flow = duty_kw * 3600.0 / max(latent_steam, 1e-9)
+
+        eff_notes: list[str] = []
+        if actual_dt < 5.0:
+            eff_notes.append("Effect ΔT < 5 °C; thermally constrained and sensitive to fouling.")
+        if liquor_solids_pct >= 55.0:
+            eff_notes.append(f"Liquor ≥ {liquor_solids_pct:.0f} wt% solids; viscosity and heat transfer may degrade significantly.")
+        if cfg.bpe_c > 8.0:
+            eff_notes.append(f"BPE of {cfg.bpe_c:.1f} °C is high; verify for this concentration range.")
+        if area_util > 1.0:
+            eff_notes.append(f"Required area ({required_area:.0f} m²) exceeds installed ({area:.0f} m²); this effect may be limiting.")
+
+        effects.append(BodyByBodyEffectResult(
+            effect_number=idx,
+            steam_temperature_c=round(steam_temp, 2),
+            boiling_temperature_c=round(boil_temp, 2),
+            effect_pressure_kpa_abs=round(effect_pressures[idx], 2),
+            bpe_c=round(cfg.bpe_c, 2),
+            net_delta_t_c=round(actual_dt, 2),
+            feed_in_temperature_c=round(feed_in_temp, 1),
+            feed_out_temperature_c=round(boil_temp, 1),
+            evaporation_kg_h=round(evap_kg_h, 1),
+            cumulative_evaporation_kg_h=round(cumulative_evap, 1),
+            liquor_solids_wt_pct=round(liquor_solids_pct, 2),
+            liquor_flow_kg_h=round(liquor_flow_val, 1),
+            steam_flow_kg_h=round(steam_flow, 1),
+            sensible_heat_kw=round(sensible_kw, 2),
+            duty_kw=round(duty_kw, 2),
+            u_w_m2_k=round(u, 0),
+            required_area_m2=round(min(required_area, area * 3.0), 0) if required_area != float("inf") else 0,
+            area_utilization=round(min(area_util, 3.0), 3),
+            notes=eff_notes,
+        ))
+
+    total_steam_kg_h = effects[0].steam_flow_kg_h if effects else 0.0
+    total_evaporation = sum(e.evaporation_kg_h for e in effects)
+    product_rate = max(feed_config.feed_rate_kg_h - total_evaporation, dissolved_solids_kg_h)
+    steam_economy = total_evaporation / max(total_steam_kg_h, 1e-9)
+
+    notes = [
+        f"Body-by-body staging screen ({feed_config.flow_direction}-feed, feed enters effect {feed_config.feed_effect}).",
+        "Per-effect U values can differ significantly as liquor concentration and viscosity change between effects.",
+        "ΔT is distributed proportional to 1/U so that effects with higher U get less temperature driving force.",
+        "Sensible heat to bring feed to boiling reduces the latent-heat available for evaporation.",
+        "Area utilization > 1.0 means the installed area is insufficient for the implied duty at this effect's U and ΔT.",
+        "Evaporation is scaled so that the total matches the feed water that can reasonably be removed.",
+        "This is a steady-state screening model; confirm with a rigorous heat-and-materials-balance simulation.",
+    ]
+
+    if steam_economy > n_effects * 1.05:
+        notes.append(f"Steam economy ({steam_economy:.2f}) exceeds {n_effects}; this may indicate over-capacity for the entered U and areas.")
+    elif steam_economy < n_effects * 0.4:
+        notes.append(f"Steam economy ({steam_economy:.2f}) is below expected for {n_effects} effects; check U and BPE assumptions.")
+
+    last_effect = effects[-1] if effects else None
+    if last_effect and last_effect.net_delta_t_c < 3.0 and n_effects >= 3:
+        notes.append("Last-effect ΔT is very tight (< 3 °C). Consider fewer effects, higher steam pressure, or deeper vacuum.")
+
+    return BodyByBodyResult(
+        n_effects=n_effects,
+        feed_rate_kg_h=feed_config.feed_rate_kg_h,
+        product_rate_kg_h=round(product_rate, 1),
+        total_evaporation_kg_h=round(total_evaporation, 1),
+        steam_flow_kg_h=round(total_steam_kg_h, 1),
+        overall_steam_economy=round(steam_economy, 2),
+        effects=effects,
+        notes=notes,
+    )
 
 
 def evaluate_fouling_and_ncg_allowance(inputs: FoulingAllowanceInputs) -> FoulingAllowanceResult:

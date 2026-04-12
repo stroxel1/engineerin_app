@@ -26,9 +26,12 @@ from engineering_app.core.curves import (
     make_curve_from_xy_rows,
 )
 from engineering_app.core.evaporators import (
+    BodyByBodyEffectInput,
+    BodyByBodyFeedConfig,
     EvaporatorDesignCalibrationInputs,
     EvaporatorInputs,
     FoulingAllowanceInputs,
+    estimate_body_by_body_evaporation,
     estimate_design_calibrated_evaporation,
     estimate_evaporation,
     estimate_multi_effect_evaporation,
@@ -204,9 +207,9 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("done", "Evaporators: refine multi-effect staging with workbook-derived U calibration - landed"),
-            ("done", "Steam jets: vendor-specific workbook presets (Croll-Reynolds, Graham, S&K, GEA)"),
-            ("active", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+            ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
+            ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
+            ("todo", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance — landed"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -225,6 +228,7 @@ def render_dashboard() -> None:
             ("done", "Pump field troubleshooting check from suction/discharge gauges with developed head and expected-TDH comparison"),
             ("done", "Pump field baseline comparison and measured-vs-curve mismatch diagnosis"),
             ("done", "Parallel branch balancing-device Cv/Kv and orifice sizing screen"),
+            ("done", "Evaporators: body-by-body staging with per-effect U/area, feed preheat, forward/backward flow, and area utilization"),
             ("done", "Citric crystallizer slurry basis plus supersaturation / metastable-band screening"),
             ("done", "Parallel branch and vessel/static-head screens"),
             ("done", "Evaporator design-calibrated U·A·ΔT capacity mode"),
@@ -2591,7 +2595,7 @@ def render_evaporators() -> None:
         bpe_c = auto_props.estimated_bpe_c
         st.caption(f"Auto-estimated BPE for {PRODUCT_PROFILES[evaporator_product].display_name}: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
 
-    tabs = st.tabs(["Target duty", "Design-calibrated mode", "Fouling & NCG", "Multi-effect staging"])
+    tabs = st.tabs(["Target duty", "Design-calibrated mode", "Fouling & NCG", "Multi-effect staging", "Body-by-body staging"])
 
     with tabs[0]:
         result = estimate_evaporation(
@@ -2930,6 +2934,199 @@ def render_evaporators() -> None:
                             "liquor_solids_wt_pct": eff.liquor_solids_wt_pct,
                         }
                         for eff in me_result.effects
+                    ],
+                },
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[4]:
+        st.caption("Screen a multi-effect evaporator train with per-effect U values, installed areas, feed preheat, and flow direction. Unlike the simplified equal-ΔT mode, each body can have different heat-transfer coefficients and areas, and sensible-heat effects are explicitly tracked.")
+
+        bb1, bb2, bb3 = st.columns(3)
+        bb_n_effects = bb1.number_input("Number of effects", min_value=1, max_value=8, value=3, step=1, key="ev_bb_n_effects")
+        bb_feed_rate = bb2.number_input("Feed rate", value=25000.0, key="ev_bb_feed_rate")
+        bb_feed_rate_unit = bb3.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="ev_bb_feed_rate_unit")
+
+        bb4, bb5, bb6, bb7 = st.columns(4)
+        bb_feed_solids = bb4.number_input("Feed solids (wt%)", value=12.0, key="ev_bb_feed_solids")
+        bb_feed_temp = bb5.number_input("Feed temperature", value=85.0, key="ev_bb_feed_temp")
+        bb_feed_temp_unit = bb6.selectbox("Feed temp unit", TEMPERATURE_UNITS, index=0, key="ev_bb_feed_temp_unit")
+        bb_flow_dir = bb7.selectbox("Flow direction", ["forward", "backward"], key="ev_bb_dir")
+
+        bb8, bb9, bb10 = st.columns(3)
+        bb_feed_effect = bb8.number_input("Feed entry effect (1-" + str(bb_n_effects) + ")", min_value=1, max_value=max(bb_n_effects, 1), value=1 if bb_flow_dir == "forward" else bb_n_effects, step=1, key="ev_bb_feed_eff")
+        bb_steam_pressure = bb9.number_input("Steam pressure", value=3.5, key="ev_bb_steam_pressure")
+        bb_steam_pressure_unit = bb10.selectbox("Steam pressure unit", PRESSURE_UNITS, index=4, key="ev_bb_steam_pressure_unit")
+
+        bb11, bb12 = st.columns(2)
+        bb_last_effect_pressure = bb11.number_input("Last-effect pressure", value=12.0, key="ev_bb_last_pressure")
+        bb_last_effect_pressure_unit = bb12.selectbox("Last-effect pressure unit", PRESSURE_UNITS, index=0, key="ev_bb_last_pressure_unit")
+
+        bb13, bb14, bb15 = st.columns(3)
+        bb_duty_per_kg = bb13.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_bb_spec_duty")
+        bb_temp_out_unit = bb14.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_bb_temp_out")
+        bb_flow_out_unit = bb15.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_bb_flow_out")
+
+        st.markdown("**Per-effect configuration**")
+        st.caption("Enter U and installed area for each body. U typically drops in later effects as liquor concentration and viscosity increase.")
+        effect_cols = st.columns(min(bb_n_effects, 8))
+        bb_effect_configs: list[BodyByBodyEffectInput] = []
+        for i in range(bb_n_effects):
+            with effect_cols[i]:
+                st.markdown(f"**Effect {i+1}**")
+                eff_u = st.number_input(
+                    f"Overall U (W/m²·K)", value=2500 - i * 400, min_value=200, key=f"ev_bb_u_{i}"
+                )
+                eff_a = st.number_input(
+                    f"Installed area (m²)", value=200.0 + i * 20, min_value=10, key=f"ev_bb_area_{i}"
+                )
+                eff_bpe = st.number_input(
+                    f"BPE (°C)", value=3.0 + i * 3.0, min_value=0.0, key=f"ev_bb_bpe_{i}"
+                )
+                bb_effect_configs.append(BodyByBodyEffectInput(
+                    effect_number=i + 1,
+                    u_w_m2_k=eff_u,
+                    area_m2=eff_a,
+                    bpe_c=eff_bpe,
+                ))
+
+        bb_feed_temp_c = bb_feed_temp if bb_feed_temp_unit == "C" else (bb_feed_temp - 32.0) * 5.0 / 9.0
+        feed_config = BodyByBodyFeedConfig(
+            feed_rate_kg_h=bb_feed_rate if bb_feed_rate_unit == "kg/h" else mass_flow_to_kg_h(bb_feed_rate, bb_feed_rate_unit),
+            feed_solids_wt_pct=bb_feed_solids,
+            feed_temperature_c=bb_feed_temp_c,
+            feed_effect=bb_feed_effect,
+            flow_direction=bb_flow_dir,
+        )
+
+        try:
+            bb_result = estimate_body_by_body_evaporation(
+                feed_config=feed_config,
+                effect_configs=bb_effect_configs,
+                steam_pressure_value=bb_steam_pressure,
+                steam_pressure_unit=bb_steam_pressure_unit,
+                last_effect_pressure_value=bb_last_effect_pressure,
+                last_effect_pressure_unit=bb_last_effect_pressure_unit,
+                estimated_specific_evaporation_duty_kj_kg=bb_duty_per_kg,
+            )
+
+            x1, x2, x3, x4 = st.columns(4)
+            x1.metric("Number of effects", str(bb_result.n_effects))
+            x2.metric("Total evaporation", f"{kg_h_to_mass_flow(bb_result.total_evaporation_kg_h, bb_feed_rate_unit):,.1f} {bb_feed_rate_unit}")
+            x3.metric("Steam required", f"{kg_h_to_mass_flow(bb_result.steam_flow_kg_h, bb_feed_rate_unit):,.1f} {bb_feed_rate_unit}")
+            x4.metric("Steam economy", f"{bb_result.overall_steam_economy:.2f} kg/kg")
+
+            y1, y2 = st.columns(2)
+            y1.metric("Product rate", f"{kg_h_to_mass_flow(bb_result.product_rate_kg_h, bb_feed_rate_unit):,.1f} {bb_feed_rate_unit}")
+            y2.metric("Feed rate", f"{kg_h_to_mass_flow(bb_result.feed_rate_kg_h, bb_feed_rate_unit):,.1f} {bb_feed_rate_unit}")
+
+            st.subheader("Body-by-body detail")
+            bb_df = pd.DataFrame([
+                {
+                    "Effect": f"{eff.effect_number}",
+                    f"Steam temp ({bb_temp_out_unit})": _display_temperature(eff.steam_temperature_c, bb_temp_out_unit),
+                    f"Boiling temp ({bb_temp_out_unit})": _display_temperature(eff.boiling_temperature_c, bb_temp_out_unit),
+                    "BPE (°C)": eff.bpe_c,
+                    "Net ΔT (°C)": eff.net_delta_t_c,
+                    "Pressure (kPa abs)": eff.effect_pressure_kpa_abs,
+                    f"Evap ({bb_feed_rate_unit})": kg_h_to_mass_flow(eff.evaporation_kg_h, bb_feed_rate_unit),
+                    f"Cum. evap (kg/h)": eff.cumulative_evaporation_kg_h,
+                    "Liquor solids (wt%)": eff.liquor_solids_wt_pct,
+                    f"Liquor flow ({bb_feed_rate_unit})": kg_h_to_mass_flow(eff.liquor_flow_kg_h, bb_feed_rate_unit),
+                    f"Steam ({bb_feed_rate_unit})": kg_h_to_mass_flow(eff.steam_flow_kg_h, bb_feed_rate_unit),
+                    "Sensible heat (kW)": eff.sensible_heat_kw,
+                    "Duty (kW)": eff.duty_kw,
+                    "U (W/m²·K)": eff.u_w_m2_k,
+                    "Req. area (m²)": eff.required_area_m2,
+                    f"Inst. area (m²)": eff.u_w_m2_k * 0 + bb_effect_configs[eff.effect_number - 1].area_m2,
+                    "Area util.": eff.area_utilization,
+                    f"Feed in ({bb_temp_out_unit})": _display_temperature(eff.feed_in_temperature_c, bb_temp_out_unit),
+                }
+                for eff in bb_result.effects
+            ])
+            st.dataframe(bb_df, use_container_width=True)
+
+            # Temperature profile
+            eff_nums = [eff.effect_number for eff in bb_result.effects]
+            steam_temps = [eff.steam_temperature_c for eff in bb_result.effects]
+            boil_temps = [eff.boiling_temperature_c for eff in bb_result.effects]
+            feed_in_temps = [eff.feed_in_temperature_c for eff in bb_result.effects]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=eff_nums, y=steam_temps, mode="lines+markers", name="Steam temp", line=dict(dash="dash")))
+            fig.add_trace(go.Scatter(x=eff_nums, y=boil_temps, mode="lines+markers", name="Boiling temp"))
+            fig.add_trace(go.Scatter(x=eff_nums, y=feed_in_temps, mode="lines+markers", name="Feed in temp", line=dict(dash="dot")))
+            fig.update_layout(
+                title="Body-by-body temperature profile",
+                xaxis_title="Effect number",
+                yaxis_title="Temperature (°C)",
+                xaxis=dict(tickmode="linear", dtick=1),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Duty and area utilization
+            z1, z2 = st.columns(2)
+            with z1:
+                fig_duty = go.Figure()
+                fig_duty.add_trace(go.Bar(x=eff_nums, y=[eff.duty_kw for eff in bb_result.effects], name="Duty (kW)"))
+                fig_duty.add_trace(go.Bar(x=eff_nums, y=[eff.sensible_heat_kw for eff in bb_result.effects], name="Sensible heat (kW)"))
+                fig_duty.update_layout(
+                    title="Duty breakdown by effect",
+                    xaxis_title="Effect number",
+                    yaxis_title="Duty (kW)",
+                    xaxis=dict(tickmode="linear", dtick=1),
+                    barmode="stack",
+                )
+                st.plotly_chart(fig_duty, use_container_width=True)
+
+            with z2:
+                fig_area = go.Figure()
+                inst_areas = [bb_effect_configs[eff.effect_number - 1].area_m2 for eff in bb_result.effects]
+                fig_area.add_trace(go.Bar(x=eff_nums, y=inst_areas, name="Installed area (m²)", width=0.3, offset=-0.25))
+                fig_area.add_trace(go.Bar(x=eff_nums, y=[eff.required_area_m2 for eff in bb_result.effects], name="Required area (m²)", width=0.3, offset=0.15))
+                fig_area.add_trace(go.Scatter(x=eff_nums, y=[eff.area_utilization for eff in bb_result.effects], mode="lines+markers", name="Area utilization", yaxis="y2"))
+                fig_area.update_layout(
+                    title="Area comparison and utilization",
+                    xaxis_title="Effect number",
+                    yaxis_title="Area (m²)",
+                    xaxis=dict(tickmode="linear", dtick=1),
+                )
+                st.plotly_chart(fig_area, use_container_width=True)
+
+            _show_notes(bb_result.notes)
+            _remember_case(
+                "evaporators-body-by-body",
+                {
+                    "n_effects": bb_n_effects,
+                    "feed_rate": bb_feed_rate,
+                    "feed_rate_unit": bb_feed_rate_unit,
+                    "feed_solids": bb_feed_solids,
+                    "feed_temp_c": bb_feed_temp_c,
+                    "flow_direction": bb_flow_dir,
+                    "feed_effect": bb_feed_effect,
+                    "steam_pressure": bb_steam_pressure,
+                    "steam_pressure_unit": bb_steam_pressure_unit,
+                    "last_effect_pressure": bb_last_effect_pressure,
+                    "last_effect_pressure_unit": bb_last_effect_pressure_unit,
+                    "effects": [{"u": c.u_w_m2_k, "area": c.area_m2, "bpe": c.bpe_c, "effect": c.effect_number} for c in bb_effect_configs],
+                },
+                {
+                    "n_effects": bb_result.n_effects,
+                    "total_evaporation_kg_h": bb_result.total_evaporation_kg_h,
+                    "product_rate_kg_h": bb_result.product_rate_kg_h,
+                    "steam_flow_kg_h": bb_result.steam_flow_kg_h,
+                    "steam_economy": bb_result.overall_steam_economy,
+                    "effects": [
+                        {
+                            "effect_number": eff.effect_number,
+                            "steam_temp_c": eff.steam_temperature_c,
+                            "boiling_temp_c": eff.boiling_temperature_c,
+                            "pressure_kpa_abs": eff.effect_pressure_kpa_abs,
+                            "evaporation_kg_h": eff.evaporation_kg_h,
+                            "liquor_solids_wt_pct": eff.liquor_solids_wt_pct,
+                            "area_utilization": eff.area_utilization,
+                        }
+                        for eff in bb_result.effects
                     ],
                 },
             )
@@ -3308,11 +3505,12 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Evaporators: body-by-body staging with inter-stage flow/temperature balance - landed"),
-        ("done", "Steam jets: vendor-specific workbook presets (Croll-Reynolds, Graham, S&K, GEA) with auto-detect"),
+        ("done", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
         ("done", "Evaporator fouling/NCG allowance screening with U-degradation and delta-T penalty"),
         ("done", "Pump hydraulics BEP proximity and instrument-bias screening"),
-        ("active", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+        ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
+        ("done", "Evaporators: body-by-body staging with per-effect U, area, flow direction, and sensible-heat balance"),
+        ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the preview normalizer"),
     ])
 
     st.subheader("Next queued additions")
@@ -3330,6 +3528,7 @@ def render_roadmap() -> None:
         ("done", "Hydraulics: add balancing-valve/orifice coefficient sizing from parallel branch split checks"),
         ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
         ("done", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
+        ("done", "Evaporators: body-by-body staging with per-effect U/area, feed preheat, forward/backward flow direction, sensible-heat tracking, and area utilization"),
     ])
 
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")
