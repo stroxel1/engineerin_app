@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-12 02:00 CDT
+Last updated: 2026-04-12 03:17 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -9,16 +9,16 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `/Users/stephentroxel/Documents/projects/engineering_app`
 
 ## Current verified app URL
-- `http://127.0.0.1:8597`
+- `http://127.0.0.1:8612`
 - Verified HTTP status: 200 OK
-- Browser snapshot loaded the Dashboard and Steam Jets sections successfully with no browser console errors
-- Steam Jets > Workbook family import rendered the new family / motive-basis filter cleanly during browser verification
+- Browser snapshot loaded the Dashboard and Hydraulics sections successfully with no browser console errors
+- Hydraulics > Pump & NPSHa rendered the pump field troubleshooting section plus the new baseline-comparison / curve-diagnosis controls during browser verification
 
 ## Current repo status
 - Expect tracked edits in:
   - `README.md`
-  - `core/curves.py`
-  - `io/normalizers.py`
+  - `core/hydraulics.py`
+  - `core/pump_curves.py`
   - `web_app.py`
   - `docs/development_continuity.md`
 - Untracked paths may still exist under:
@@ -80,12 +80,18 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - current-vs-proposed savings delta screens
    - ratio-target blend solver
 15. Dashboard and roadmap now show active work and completed items with strike-through formatting in-app
+16. Hydraulics expanded with a pump field troubleshooting check that converts suction/discharge gauge readings into developed head, hydraulic/brake power, vapor-pressure margin, and expected-TDH comparison
+17. Hydraulics expanded again with:
+   - current-vs-baseline field case comparison using measured flow/head/power/suction-margin deltas
+   - measured-point mismatch diagnosis against a selected pump curve at the measured flow
+   - dashboard/roadmap refresh to move the next hydraulics gap to BEP proximity / instrument-bias screening
 
 ## Files most relevant now
 - `web_app.py`
+- `core/hydraulics.py`
+- `core/pump_curves.py`
 - `io/normalizers.py`
 - `core/curves.py`
-- `core/hydraulics.py`
 - `core/steam.py`
 - `core/quicktools.py`
 - `core/crystallizers.py`
@@ -101,24 +107,24 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - Prefer practical plant calculators before design-grade rigor
 
 ## Current active work focus
-1. Hydraulics refinement
-   - extend the newer suction-vessel / NPSHa scenarios into broader pump troubleshooting workflows
-   - keep emphasis on practical plant line studies rather than academic hydraulics detail
-2. Steam jets
+1. Steam jets
    - extend workbook auto-normalization with vendor-specific sheet presets, larger preview windows if needed, and richer basis metadata display/export
    - preserve clear warnings that these are screening curves until confirmed against vendor performance data
-3. Evaporators / solution properties
-   - the next best non-steam-jet gap is still calibrated evaporator refinement or stronger >60 DS citric screening
+2. Evaporators / solution properties
+   - refine calibrated evaporator mode with fouling / non-condensable allowances or body-by-body staging
+3. Hydraulics refinement
+   - next hydraulics increment should add BEP proximity and instrument-bias screening on top of the new current-vs-baseline / measured-vs-curve workflow
+   - keep emphasis on practical plant line studies rather than academic hydraulics detail
 
 ## Next high-value work items
-1. Hydraulics
-   - add broader suction/discharge troubleshooting workflows built around the existing NPSHa and system-curve tools
-2. Steam jets
+1. Steam jets
    - add vendor-specific workbook presets / mapping aids on top of the new preview normalizer
-3. Solution BPE
-   - refine >60 DS citric estimation with stronger literature-backed correlation or clearly segmented screening bands
-4. Evaporators
+2. Evaporators
    - refine calibrated mode with fouling / non-condensable allowances or body-by-body staging
+3. Hydraulics
+   - add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow
+4. Solution BPE
+   - refine >60 DS citric estimation with stronger literature-backed correlation or clearly segmented screening bands
 
 ## Known cautions
 - The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
@@ -128,7 +134,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
   - live HTTP/browser check
 - Steam-jet workbook auto-normalization is preview-based and only sees sampled rows; treat it as a screening aid for faster mapping, not a final vendor parser
 - Citric >60 DS estimate is still a screening model and should stay labeled accordingly
-- Parallel branch and vessel tools are first-pass engineering screens, not final design calculations
+- Parallel branch, vessel, pump field comparison, and measured-vs-curve troubleshooting tools are first-pass engineering screens, not final design calculations
 - Crystallizer supersaturation bands are user-entered screening thresholds, not validated metastable-zone property data
 
 ## Resume checklist after disconnect
@@ -138,28 +144,44 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 4. Read `README.md`
 5. Run compile check:
    `python3 -m py_compile $(find /Users/stephentroxel/Documents/projects/engineering_app -name '*.py' | tr '\n' ' ')`
-6. Run import + focused steam-jet normalization smoke test:
+6. Run import + focused pump-field comparison smoke test:
    `cd /Users/stephentroxel/Documents/projects && PYTHONPATH=. /usr/bin/python3 - <<'PY'
 import engineering_app.web_app
-from engineering_app.io.normalizers import normalize_curve_workbook
-inspection = {
-    'sheet_previews': [
-        {
-            'sheet_name': 'Vendor Curves',
-            'sample_rows': [
-                ['Model', 'Motive Steam Pressure', 'Suction Load', 'Motive Steam Consumption'],
-                ['TC-A', 3.5, 2000, 3200],
-                ['TC-A', 3.5, 4000, 5000],
-                ['TC-B', 3.5, 2000, 3000],
-                ['TC-B', 3.5, 4000, 4700],
-                ['TC-C', 5.0, 2000, 2800],
-                ['TC-C', 5.0, 4000, 4450],
-            ],
-        }
-    ]
-}
-library = normalize_curve_workbook(inspection)
-print('import ok', len(library.curves), sorted({curve.family for curve in library.curves}))
+from engineering_app.core.hydraulics import analyze_pump_field_check, compare_pump_field_cases
+from engineering_app.core.pump_curves import compare_measured_point_to_curve, get_builtin_curve
+baseline = analyze_pump_field_check(
+    flow_m3_h=95.0,
+    density_kg_m3=998.0,
+    suction_pressure_value=8.0,
+    suction_pressure_unit='psig',
+    discharge_pressure_value=34.0,
+    discharge_pressure_unit='psig',
+    suction_pipe_id_mm=77.9,
+    discharge_pipe_id_mm=77.9,
+    suction_gauge_elevation_m=0.0,
+    discharge_gauge_elevation_m=1.0,
+    pump_efficiency_fraction=0.74,
+    expected_system_head_m=20.0,
+    liquid_temperature_c=30.0,
+)
+current = analyze_pump_field_check(
+    flow_m3_h=88.0,
+    density_kg_m3=998.0,
+    suction_pressure_value=4.5,
+    suction_pressure_unit='psig',
+    discharge_pressure_value=30.0,
+    discharge_pressure_unit='psig',
+    suction_pipe_id_mm=77.9,
+    discharge_pipe_id_mm=77.9,
+    suction_gauge_elevation_m=0.0,
+    discharge_gauge_elevation_m=1.0,
+    pump_efficiency_fraction=0.70,
+    expected_system_head_m=20.0,
+    liquid_temperature_c=30.0,
+)
+comparison = compare_pump_field_cases(95.0, baseline, 88.0, current)
+curve_diag = compare_measured_point_to_curve(get_builtin_curve('ansi_50hz_full'), 88.0, current.developed_head_m)
+print('import ok', round(current.developed_head_m, 3), round(comparison.developed_head_delta_m, 3), curve_diag.status)
 PY`
 7. Launch a fresh Streamlit instance on a new unused port and verify with browser tools or `curl -I`
 8. Continue the active work focus instead of rediscovering completed work

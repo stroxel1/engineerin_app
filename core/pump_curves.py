@@ -47,6 +47,18 @@ class PumpCurveRerateScreenResult:
     notes: list[str]
 
 
+@dataclass
+class PumpCurveMeasuredPointComparison:
+    measured_flow_m3_h: float
+    measured_head_m: float
+    curve_head_m: float | None
+    head_delta_m: float | None
+    head_delta_pct_of_curve: float | None
+    flow_fraction_of_curve_max: float | None
+    status: str
+    notes: list[str]
+
+
 BUILTIN_PUMP_CURVES: dict[str, PumpCurveModel] = {
     "ansi_50hz_trimmed": PumpCurveModel(
         name="ANSI process pump - trimmed impeller",
@@ -289,5 +301,82 @@ def screen_affinity_rerate(
         impeller_ratio=impeller_ratio,
         relative_power_factor=relative_power_factor,
         relative_npshr_factor=relative_npshr_factor,
+        notes=notes,
+    )
+
+
+def compare_measured_point_to_curve(
+    curve: PumpCurveModel,
+    measured_flow_m3_h: float,
+    measured_head_m: float,
+    head_tolerance_fraction: float = 0.05,
+    minimum_head_tolerance_m: float = 1.0,
+) -> PumpCurveMeasuredPointComparison:
+    if measured_flow_m3_h < 0.0:
+        raise ValueError("Measured flow must be zero or greater.")
+    if head_tolerance_fraction < 0.0:
+        raise ValueError("Head tolerance fraction must be zero or greater.")
+    if minimum_head_tolerance_m < 0.0:
+        raise ValueError("Minimum head tolerance must be zero or greater.")
+
+    min_flow = curve.points[0].flow_m3_h
+    max_flow = curve.points[-1].flow_m3_h
+    curve_head_m = interpolate_pump_head(curve, measured_flow_m3_h)
+    flow_fraction = measured_flow_m3_h / max(max_flow, 1.0e-12)
+    notes: list[str] = [
+        "Measured-point diagnosis compares the field flow/head pair against the selected pump curve at the same flow.",
+        "Treat curve mismatch as a troubleshooting screen until instrument calibration, liquid properties, and vendor test basis are confirmed.",
+    ]
+
+    if curve_head_m is None:
+        if measured_flow_m3_h < min_flow:
+            status = "below_curve_flow_range"
+            notes.append("Measured flow sits below the first curve point; compare against a lower-flow/shutoff region before diagnosing wear or suction issues.")
+        else:
+            status = "above_curve_flow_range"
+            notes.append("Measured flow sits above the last curve point; extend the curve or confirm the actual operating point before drawing conclusions.")
+        return PumpCurveMeasuredPointComparison(
+            measured_flow_m3_h=measured_flow_m3_h,
+            measured_head_m=measured_head_m,
+            curve_head_m=None,
+            head_delta_m=None,
+            head_delta_pct_of_curve=None,
+            flow_fraction_of_curve_max=flow_fraction,
+            status=status,
+            notes=notes,
+        )
+
+    head_delta_m = measured_head_m - curve_head_m
+    tolerance_m = max(abs(curve_head_m) * head_tolerance_fraction, minimum_head_tolerance_m)
+    head_delta_pct = head_delta_m / max(abs(curve_head_m), 1.0e-9)
+    if abs(head_delta_m) <= tolerance_m:
+        status = "near_curve"
+        notes.append(
+            f"Measured head is within ±{tolerance_m:.2f} m of the selected curve at this flow, which is a reasonable first-pass match."
+        )
+    elif head_delta_m < 0.0:
+        status = "below_curve"
+        notes.append(
+            "Measured head falls below the selected curve at this flow; practical causes can include lower actual speed, worn/trimmed impeller, suction starvation, entrained gas, reverse rotation, or pressure-basis/instrument error."
+        )
+    else:
+        status = "above_curve"
+        notes.append(
+            "Measured head sits above the selected curve at this flow; recheck gauge basis, curve selection, throttling/system resistance assumptions, and whether the installed impeller or speed differs from the curve basis."
+        )
+
+    if flow_fraction > 1.0:
+        notes.append("Measured flow is beyond 100% of the selected curve max flow; mismatch diagnosis is weak until the curve range is extended.")
+    elif flow_fraction > 0.9:
+        notes.append("Measured flow is near the far right end of the selected curve, where small flow-measurement error can swing the expected head materially.")
+
+    return PumpCurveMeasuredPointComparison(
+        measured_flow_m3_h=measured_flow_m3_h,
+        measured_head_m=measured_head_m,
+        curve_head_m=curve_head_m,
+        head_delta_m=head_delta_m,
+        head_delta_pct_of_curve=head_delta_pct,
+        flow_fraction_of_curve_max=flow_fraction,
+        status=status,
         notes=notes,
     )

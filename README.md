@@ -91,6 +91,9 @@ Default URL:
   - pump hydraulic/brake power
   - NPSHa screening
   - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening
+  - pump field troubleshooting check from suction/discharge gauge readings with developed head, velocity/elevation corrections, hydraulic power, and expected-TDH comparison
+  - baseline-vs-current pump field comparison with flow/head/power/suction-margin deltas
+  - measured-point mismatch diagnosis against a selected pump curve at the measured flow
   - segmented suction/discharge system breakdowns
   - parallel branch entered-split check with branch head mismatch / throttling-loss estimate
   - balancing-device screen for entered branch splits with required extra loss, equivalent Cv/Kv, and sharp-edge orifice diameter/beta estimate
@@ -146,5 +149,5 @@ Default URL:
 - Utility cost tools now include current-vs-proposed comparison screens so annual savings can be estimated directly in-app.
 - Quick Tools now include ratio-target blend solving so operators can back-calculate required dilution/addition rates from a desired final solids target.
 - Workbook inspection and steam-jet curve normalization remain conservative preview tools, intended to speed up later vendor-specific mapping rather than replace vendor performance confirmation.
-- Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.
+- Parallel branch, vessel, pump field comparison, and measured-vs-curve troubleshooting tools are first-pass engineering screens; they should be validated against plant topology, pressure-instrument basis, and vendor pump data before design decisions.
 - Crystallizer supersaturation bands are user-entered screening thresholds, not first-principles metastable-zone property data.

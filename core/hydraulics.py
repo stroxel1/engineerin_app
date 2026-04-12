@@ -165,6 +165,44 @@ class SuctionVesselNPSHAScreenResult:
 
 
 @dataclass
+class PumpFieldCheckResult:
+    suction_pressure_kpa_abs: float
+    discharge_pressure_kpa_abs: float
+    differential_pressure_head_m: float
+    suction_velocity_m_s: float
+    discharge_velocity_m_s: float
+    suction_velocity_head_m: float
+    discharge_velocity_head_m: float
+    velocity_head_change_m: float
+    elevation_head_change_m: float
+    developed_head_m: float
+    hydraulic_power_kw: float
+    brake_power_kw: float | None
+    brake_horsepower_hp: float | None
+    vapor_pressure_kpa_abs: float | None
+    suction_pressure_margin_to_vapor_kpa: float | None
+    expected_system_head_m: float | None
+    head_margin_to_expected_m: float | None
+    notes: list[str]
+
+
+@dataclass
+class PumpFieldComparisonResult:
+    baseline_flow_m3_h: float
+    current_flow_m3_h: float
+    flow_delta_m3_h: float
+    flow_delta_fraction: float | None
+    developed_head_delta_m: float
+    hydraulic_power_delta_kw: float
+    brake_power_delta_kw: float | None
+    suction_pressure_delta_kpa: float
+    discharge_pressure_delta_kpa: float
+    suction_margin_to_vapor_delta_kpa: float | None
+    expected_head_margin_delta_m: float | None
+    notes: list[str]
+
+
+@dataclass
 class ParallelBranchResult:
     name: str
     flow_m3_h: float
@@ -658,6 +696,178 @@ def screen_suction_vessel_npsha(
         required_npshr_m=required_npshr_m,
         npsh_margin_m=margin_m,
         npsh_margin_ratio=margin_ratio,
+        notes=notes,
+    )
+
+
+def analyze_pump_field_check(
+    flow_m3_h: float,
+    density_kg_m3: float,
+    suction_pressure_value: float,
+    suction_pressure_unit: str,
+    discharge_pressure_value: float,
+    discharge_pressure_unit: str,
+    suction_pipe_id_mm: float,
+    discharge_pipe_id_mm: float,
+    suction_gauge_elevation_m: float = 0.0,
+    discharge_gauge_elevation_m: float = 0.0,
+    pump_efficiency_fraction: float | None = None,
+    expected_system_head_m: float | None = None,
+    liquid_temperature_c: float | None = None,
+) -> PumpFieldCheckResult:
+    if flow_m3_h < 0.0:
+        raise ValueError("Flow must be zero or greater.")
+    if density_kg_m3 <= 0.0:
+        raise ValueError("Density must be positive.")
+    if suction_pipe_id_mm <= 0.0 or discharge_pipe_id_mm <= 0.0:
+        raise ValueError("Suction and discharge pipe IDs must be positive.")
+    if pump_efficiency_fraction is not None and not (0.0 < pump_efficiency_fraction <= 1.0):
+        raise ValueError("Pump efficiency fraction must be between 0 and 1 when provided.")
+
+    q_m3_s = flow_m3_h / 3600.0
+    suction_area_m2 = math.pi * ((suction_pipe_id_mm / 1000.0) ** 2) / 4.0
+    discharge_area_m2 = math.pi * ((discharge_pipe_id_mm / 1000.0) ** 2) / 4.0
+    suction_velocity_m_s = q_m3_s / max(suction_area_m2, 1.0e-12)
+    discharge_velocity_m_s = q_m3_s / max(discharge_area_m2, 1.0e-12)
+    suction_velocity_head_m = suction_velocity_m_s ** 2 / (2.0 * G)
+    discharge_velocity_head_m = discharge_velocity_m_s ** 2 / (2.0 * G)
+
+    suction_pressure_kpa_abs = pressure_to_kpa_abs(suction_pressure_value, suction_pressure_unit)
+    discharge_pressure_kpa_abs = pressure_to_kpa_abs(discharge_pressure_value, discharge_pressure_unit)
+    differential_pressure_head_m = (discharge_pressure_kpa_abs - suction_pressure_kpa_abs) * 1000.0 / (density_kg_m3 * G)
+    velocity_head_change_m = discharge_velocity_head_m - suction_velocity_head_m
+    elevation_head_change_m = discharge_gauge_elevation_m - suction_gauge_elevation_m
+    developed_head_m = differential_pressure_head_m + velocity_head_change_m + elevation_head_change_m
+    hydraulic_power_kw = density_kg_m3 * G * q_m3_s * max(developed_head_m, 0.0) / 1000.0
+
+    brake_power_kw = None
+    brake_horsepower_hp = None
+    if pump_efficiency_fraction is not None:
+        brake_power_kw = hydraulic_power_kw / max(pump_efficiency_fraction, 1.0e-9)
+        brake_horsepower_hp = brake_power_kw / 0.745699872
+
+    vapor_pressure_kpa_abs = None
+    suction_margin_to_vapor_kpa = None
+    if liquid_temperature_c is not None:
+        vapor_pressure_kpa_abs = _water_vapor_pressure_kpa_abs(liquid_temperature_c)
+        suction_margin_to_vapor_kpa = suction_pressure_kpa_abs - vapor_pressure_kpa_abs
+
+    head_margin_to_expected_m = None
+    if expected_system_head_m is not None:
+        head_margin_to_expected_m = developed_head_m - expected_system_head_m
+
+    notes = [
+        "Developed pump head uses the field-energy balance: discharge pressure head minus suction pressure head plus velocity-head change plus gauge elevation change.",
+        "Use gauge tap elevations relative to a common datum if the suction and discharge pressure readings are not taken at the same height.",
+    ]
+    if abs(velocity_head_change_m) > 0.5:
+        notes.append("Velocity-head correction is material in this case; keep the actual suction/discharge line IDs instead of assuming equal nozzle sizes.")
+    if developed_head_m < 0.0:
+        notes.append("Calculated developed head is negative; recheck pressure basis, instrument calibration, or whether the readings were reversed.")
+    if discharge_pressure_kpa_abs <= suction_pressure_kpa_abs:
+        notes.append("Discharge absolute pressure is not above suction pressure; verify gauge readings and pressure-unit basis.")
+    if suction_margin_to_vapor_kpa is not None:
+        if suction_margin_to_vapor_kpa <= 0.0:
+            notes.append("Suction absolute pressure is at/below the liquid vapor pressure estimate; flashing/cavitation risk is severe.")
+        elif suction_margin_to_vapor_kpa < 20.0:
+            notes.append("Suction pressure margin over vapor pressure is tight; any added suction loss or warmer liquid could collapse NPSH margin quickly.")
+    if head_margin_to_expected_m is not None:
+        if head_margin_to_expected_m < -2.0:
+            notes.append("Measured developed head is below the entered expected system head; check speed, impeller condition, suction starvation, air binding, or instrument basis.")
+        elif head_margin_to_expected_m > 2.0:
+            notes.append("Measured developed head is above the entered expected system head; throttling, a steeper real system curve, or overstated expected resistance may be present.")
+        else:
+            notes.append("Measured developed head is close to the entered expected system head for a first-pass field screen.")
+    if pump_efficiency_fraction is None:
+        notes.append("Add pump efficiency if you want brake power and hp from the measured hydraulic head.")
+
+    return PumpFieldCheckResult(
+        suction_pressure_kpa_abs=suction_pressure_kpa_abs,
+        discharge_pressure_kpa_abs=discharge_pressure_kpa_abs,
+        differential_pressure_head_m=differential_pressure_head_m,
+        suction_velocity_m_s=suction_velocity_m_s,
+        discharge_velocity_m_s=discharge_velocity_m_s,
+        suction_velocity_head_m=suction_velocity_head_m,
+        discharge_velocity_head_m=discharge_velocity_head_m,
+        velocity_head_change_m=velocity_head_change_m,
+        elevation_head_change_m=elevation_head_change_m,
+        developed_head_m=developed_head_m,
+        hydraulic_power_kw=hydraulic_power_kw,
+        brake_power_kw=brake_power_kw,
+        brake_horsepower_hp=brake_horsepower_hp,
+        vapor_pressure_kpa_abs=vapor_pressure_kpa_abs,
+        suction_pressure_margin_to_vapor_kpa=suction_margin_to_vapor_kpa,
+        expected_system_head_m=expected_system_head_m,
+        head_margin_to_expected_m=head_margin_to_expected_m,
+        notes=notes,
+    )
+
+
+def compare_pump_field_cases(
+    baseline_flow_m3_h: float,
+    baseline: PumpFieldCheckResult,
+    current_flow_m3_h: float,
+    current: PumpFieldCheckResult,
+) -> PumpFieldComparisonResult:
+    flow_delta_m3_h = current_flow_m3_h - baseline_flow_m3_h
+    flow_delta_fraction = None
+    if abs(baseline_flow_m3_h) > 1.0e-9:
+        flow_delta_fraction = flow_delta_m3_h / baseline_flow_m3_h
+
+    brake_power_delta_kw = None
+    if baseline.brake_power_kw is not None and current.brake_power_kw is not None:
+        brake_power_delta_kw = current.brake_power_kw - baseline.brake_power_kw
+
+    suction_margin_delta_kpa = None
+    if baseline.suction_pressure_margin_to_vapor_kpa is not None and current.suction_pressure_margin_to_vapor_kpa is not None:
+        suction_margin_delta_kpa = current.suction_pressure_margin_to_vapor_kpa - baseline.suction_pressure_margin_to_vapor_kpa
+
+    expected_head_margin_delta_m = None
+    if baseline.head_margin_to_expected_m is not None and current.head_margin_to_expected_m is not None:
+        expected_head_margin_delta_m = current.head_margin_to_expected_m - baseline.head_margin_to_expected_m
+
+    notes = [
+        "Baseline comparison is a field-troubleshooting screen that compares a current measured case against a reference/baseline operating case.",
+        "Use similar liquid density, pressure-instrument basis, and speed basis in both cases before concluding the pump itself changed.",
+    ]
+    developed_head_delta_m = current.developed_head_m - baseline.developed_head_m
+    hydraulic_power_delta_kw = current.hydraulic_power_kw - baseline.hydraulic_power_kw
+    suction_pressure_delta_kpa = current.suction_pressure_kpa_abs - baseline.suction_pressure_kpa_abs
+    discharge_pressure_delta_kpa = current.discharge_pressure_kpa_abs - baseline.discharge_pressure_kpa_abs
+
+    similar_flow = flow_delta_fraction is not None and abs(flow_delta_fraction) <= 0.10
+    if similar_flow and developed_head_delta_m < -2.0:
+        notes.append("At roughly similar flow, the current case is developing materially less head than baseline; check speed, impeller wear/damage, suction starvation, gas entrainment, or instrument bias.")
+    elif similar_flow and developed_head_delta_m > 2.0:
+        notes.append("At roughly similar flow, the current case is developing more head than baseline; check for throttling changes, higher speed, different impeller trim, or gauge-basis changes.")
+
+    if flow_delta_m3_h < 0.0 and developed_head_delta_m > 1.0:
+        notes.append("Current flow is down while developed head is up, which often points toward added downstream resistance, throttling, plugging, or a steeper current system curve.")
+    elif flow_delta_m3_h > 0.0 and developed_head_delta_m < -1.0:
+        notes.append("Current flow is up while developed head is down, which often points toward reduced system resistance or a pump operating farther right on its curve.")
+
+    if suction_pressure_delta_kpa < -10.0:
+        notes.append("Current suction pressure is materially lower than baseline; inspect upstream level, suction-line fouling, valve position, strainers, or vapor binding.")
+    if suction_margin_delta_kpa is not None and suction_margin_delta_kpa < -10.0:
+        notes.append("Margin over vapor pressure is materially worse than baseline, so the current case has stronger cavitation / flashing risk.")
+    if expected_head_margin_delta_m is not None:
+        if expected_head_margin_delta_m < -2.0:
+            notes.append("Current case is falling farther below the expected system TDH than baseline, which strengthens the case for pump/suction degradation or measurement-basis drift.")
+        elif expected_head_margin_delta_m > 2.0:
+            notes.append("Current case is sitting farther above the expected system TDH than baseline, which can happen with extra throttling, lower actual system flow, or an understated expected-resistance basis.")
+
+    return PumpFieldComparisonResult(
+        baseline_flow_m3_h=baseline_flow_m3_h,
+        current_flow_m3_h=current_flow_m3_h,
+        flow_delta_m3_h=flow_delta_m3_h,
+        flow_delta_fraction=flow_delta_fraction,
+        developed_head_delta_m=developed_head_delta_m,
+        hydraulic_power_delta_kw=hydraulic_power_delta_kw,
+        brake_power_delta_kw=brake_power_delta_kw,
+        suction_pressure_delta_kpa=suction_pressure_delta_kpa,
+        discharge_pressure_delta_kpa=discharge_pressure_delta_kpa,
+        suction_margin_to_vapor_delta_kpa=suction_margin_delta_kpa,
+        expected_head_margin_delta_m=expected_head_margin_delta_m,
         notes=notes,
     )
 

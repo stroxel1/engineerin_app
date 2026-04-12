@@ -32,11 +32,13 @@ from engineering_app.core.evaporators import (
 from engineering_app.core.hydraulics import (
     PipeSegment,
     analyze_parallel_branches,
+    analyze_pump_field_check,
     build_system_curve,
     calculate_hydraulics_with_units,
     calculate_pump_power,
     calculate_segmented_system,
     calculate_vessel_static_head,
+    compare_pump_field_cases,
     compare_schedule_10s_sizes,
     estimate_npsha,
     find_pump_system_intersection,
@@ -51,6 +53,7 @@ from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLE
 from engineering_app.core.pump_curves import (
     available_builtin_curve_options,
     build_curve_from_xy_rows as build_pump_curve_from_xy_rows,
+    compare_measured_point_to_curve,
     find_curve_system_intersection,
     get_builtin_curve,
     screen_affinity_rerate,
@@ -189,10 +192,10 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Hydraulics refinement: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
             ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
-            ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+            ("active", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
             ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+            ("todo", "Hydraulics: add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -206,6 +209,8 @@ def render_dashboard() -> None:
             ("done", "Hydraulics pump curve library/upload matched against system curves"),
             ("done", "Pump rerate / affinity screening from speed or impeller changes"),
             ("done", "Suction vessel + NPSHa scenario with optional NPSHr margin screening"),
+            ("done", "Pump field troubleshooting check from suction/discharge gauges with developed head and expected-TDH comparison"),
+            ("done", "Pump field baseline comparison and measured-vs-curve mismatch diagnosis"),
             ("done", "Parallel branch balancing-device Cv/Kv and orifice sizing screen"),
             ("done", "Citric crystallizer slurry basis plus supersaturation / metastable-band screening"),
             ("done", "Parallel branch and vessel/static-head screens"),
@@ -1206,6 +1211,230 @@ def render_hydraulics() -> None:
             sm4.metric("NPSH margin", "Enter NPSHr")
         _show_notes(suction_vessel_screen.notes)
         st.json(asdict(suction_vessel_screen))
+
+        st.divider()
+        st.subheader("Pump field troubleshooting check")
+        st.caption("Convert field suction/discharge pressure readings into developed head and hydraulic power, then compare against the expected system TDH to screen for suction starvation, wear, throttling, or instrument-basis issues.")
+        pf1, pf2, pf3, pf4 = st.columns(4)
+        suction_pressure_value = pf1.number_input("Measured suction pressure", value=5.0, key="hyd_field_suction_pressure")
+        suction_pressure_unit = pf2.selectbox("Suction pressure unit", PRESSURE_UNITS, index=6, key="hyd_field_suction_pressure_unit")
+        discharge_pressure_value = pf3.number_input("Measured discharge pressure", value=32.0, key="hyd_field_discharge_pressure")
+        discharge_pressure_unit = pf4.selectbox("Discharge pressure unit", PRESSURE_UNITS, index=6, key="hyd_field_discharge_pressure_unit")
+        pf5, pf6, pf7, pf8 = st.columns(4)
+        suction_pipe_id_value = pf5.number_input("Suction line/nozzle ID", min_value=0.01, value=pipe_id, key="hyd_field_suction_id")
+        suction_pipe_id_unit = pf6.selectbox("Suction ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index(pipe_id_unit) if pipe_id_unit in LENGTH_UNITS else 0, key="hyd_field_suction_id_unit")
+        discharge_pipe_id_value = pf7.number_input("Discharge line/nozzle ID", min_value=0.01, value=pipe_id, key="hyd_field_discharge_id")
+        discharge_pipe_id_unit = pf8.selectbox("Discharge ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index(pipe_id_unit) if pipe_id_unit in LENGTH_UNITS else 0, key="hyd_field_discharge_id_unit")
+        pf9, pf10, pf11, pf12 = st.columns(4)
+        suction_gauge_elevation = pf9.number_input("Suction gauge elevation", value=0.0, key="hyd_field_suction_elev")
+        suction_gauge_elevation_unit = pf10.selectbox("Suction elevation unit", LENGTH_UNITS, index=0, key="hyd_field_suction_elev_unit")
+        discharge_gauge_elevation = pf11.number_input("Discharge gauge elevation", value=0.0, key="hyd_field_discharge_elev")
+        discharge_gauge_elevation_unit = pf12.selectbox("Discharge elevation unit", LENGTH_UNITS, index=0, key="hyd_field_discharge_elev_unit")
+        pf13, pf14, pf15, pf16 = st.columns(4)
+        field_efficiency = pf13.number_input("Field pump efficiency (fraction)", min_value=0.05, max_value=1.0, value=efficiency, key="hyd_field_efficiency")
+        compare_expected_head = pf14.checkbox("Compare against expected system TDH", value=True, key="hyd_field_compare_expected")
+        expected_head_value = pf15.number_input("Expected system TDH", min_value=0.0, value=result.total_dynamic_head_m, key="hyd_field_expected_head", disabled=not compare_expected_head)
+        expected_head_unit = pf16.selectbox("Expected TDH unit", LENGTH_UNITS, index=0, key="hyd_field_expected_head_unit", disabled=not compare_expected_head)
+        field_head_output_unit = st.selectbox("Field-check head output unit", LENGTH_UNITS, index=0, key="hyd_field_head_out")
+        field_check = analyze_pump_field_check(
+            flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+            density_kg_m3=density_kg_m3,
+            suction_pressure_value=suction_pressure_value,
+            suction_pressure_unit=suction_pressure_unit,
+            discharge_pressure_value=discharge_pressure_value,
+            discharge_pressure_unit=discharge_pressure_unit,
+            suction_pipe_id_mm=length_to_m(suction_pipe_id_value, suction_pipe_id_unit) * 1000.0,
+            discharge_pipe_id_mm=length_to_m(discharge_pipe_id_value, discharge_pipe_id_unit) * 1000.0,
+            suction_gauge_elevation_m=length_to_m(suction_gauge_elevation, suction_gauge_elevation_unit),
+            discharge_gauge_elevation_m=length_to_m(discharge_gauge_elevation, discharge_gauge_elevation_unit),
+            pump_efficiency_fraction=field_efficiency,
+            expected_system_head_m=length_to_m(expected_head_value, expected_head_unit) if compare_expected_head else None,
+            liquid_temperature_c=liquid_temp,
+        )
+        fm1, fm2, fm3, fm4 = st.columns(4)
+        fm1.metric("Developed head", f"{m_to_length(field_check.developed_head_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+        fm2.metric("Pressure head rise", f"{m_to_length(field_check.differential_pressure_head_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+        fm3.metric("Velocity correction", f"{m_to_length(field_check.velocity_head_change_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+        fm4.metric("Elevation correction", f"{m_to_length(field_check.elevation_head_change_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+        fn1, fn2, fn3, fn4 = st.columns(4)
+        fn1.metric("Hydraulic power", f"{kw_to_power(field_check.hydraulic_power_kw, power_unit):,.2f} {power_unit}")
+        fn2.metric("Brake power", f"{kw_to_power(field_check.brake_power_kw, power_unit):,.2f} {power_unit}" if field_check.brake_power_kw is not None else "n/a")
+        fn3.metric("Brake horsepower", f"{field_check.brake_horsepower_hp:,.2f} hp" if field_check.brake_horsepower_hp is not None else "n/a")
+        if field_check.head_margin_to_expected_m is not None:
+            fn4.metric(
+                "Head margin vs expected",
+                f"{m_to_length(field_check.head_margin_to_expected_m, field_head_output_unit):,.2f} {field_head_output_unit}",
+                delta=f"vs {m_to_length(field_check.expected_system_head_m, field_head_output_unit):,.2f} {field_head_output_unit}",
+            )
+        else:
+            fn4.metric("Head margin vs expected", "Not enabled")
+        fv1, fv2, fv3, fv4 = st.columns(4)
+        fv1.metric("Suction velocity", f"{m_s_to_velocity(field_check.suction_velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
+        fv2.metric("Discharge velocity", f"{m_s_to_velocity(field_check.discharge_velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
+        fv3.metric("Suction pressure", f"{kpa_abs_to_pressure(field_check.suction_pressure_kpa_abs, suction_pressure_unit):,.2f} {suction_pressure_unit}")
+        if field_check.suction_pressure_margin_to_vapor_kpa is not None:
+            fv4.metric("Suction margin over vapor", f"{_pressure_delta_from_kpa(field_check.suction_pressure_margin_to_vapor_kpa, 'kPa'):,.2f} kPa")
+        else:
+            fv4.metric("Suction margin over vapor", "Add temperature")
+        _show_notes(field_check.notes)
+
+        st.divider()
+        st.subheader("Baseline comparison & curve diagnosis")
+        st.caption("Compare the current measured case against a known-good baseline and, when available, check both cases against a selected pump curve at the same measured flow.")
+        baseline_enabled = st.checkbox("Enable baseline/reference comparison", value=True, key="hyd_field_baseline_enabled")
+        if baseline_enabled:
+            base1, base2, base3, base4 = st.columns(4)
+            baseline_flow_value = base1.number_input("Baseline flow", min_value=0.0, value=flow_value, key="hyd_field_baseline_flow")
+            baseline_flow_unit = base2.selectbox("Baseline flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_field_baseline_flow_unit")
+            baseline_suction_pressure_value = base3.number_input("Baseline suction pressure", value=suction_pressure_value, key="hyd_field_baseline_suction_pressure")
+            baseline_suction_pressure_unit = base4.selectbox("Baseline suction pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index(suction_pressure_unit) if suction_pressure_unit in PRESSURE_UNITS else 0, key="hyd_field_baseline_suction_pressure_unit")
+            base5, base6, base7, base8 = st.columns(4)
+            baseline_discharge_pressure_value = base5.number_input("Baseline discharge pressure", value=discharge_pressure_value, key="hyd_field_baseline_discharge_pressure")
+            baseline_discharge_pressure_unit = base6.selectbox("Baseline discharge pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index(discharge_pressure_unit) if discharge_pressure_unit in PRESSURE_UNITS else 0, key="hyd_field_baseline_discharge_pressure_unit")
+            baseline_suction_pipe_id_value = base7.number_input("Baseline suction ID", min_value=0.01, value=suction_pipe_id_value, key="hyd_field_baseline_suction_id")
+            baseline_suction_pipe_id_unit = base8.selectbox("Baseline suction ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index(suction_pipe_id_unit) if suction_pipe_id_unit in LENGTH_UNITS else 0, key="hyd_field_baseline_suction_id_unit")
+            base9, base10, base11, base12 = st.columns(4)
+            baseline_discharge_pipe_id_value = base9.number_input("Baseline discharge ID", min_value=0.01, value=discharge_pipe_id_value, key="hyd_field_baseline_discharge_id")
+            baseline_discharge_pipe_id_unit = base10.selectbox("Baseline discharge ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index(discharge_pipe_id_unit) if discharge_pipe_id_unit in LENGTH_UNITS else 0, key="hyd_field_baseline_discharge_id_unit")
+            baseline_suction_elevation = base11.number_input("Baseline suction gauge elevation", value=suction_gauge_elevation, key="hyd_field_baseline_suction_elev")
+            baseline_suction_elevation_unit = base12.selectbox("Baseline suction elevation unit", LENGTH_UNITS, index=LENGTH_UNITS.index(suction_gauge_elevation_unit) if suction_gauge_elevation_unit in LENGTH_UNITS else 0, key="hyd_field_baseline_suction_elev_unit")
+            base13, base14, base15, base16 = st.columns(4)
+            baseline_discharge_elevation = base13.number_input("Baseline discharge gauge elevation", value=discharge_gauge_elevation, key="hyd_field_baseline_discharge_elev")
+            baseline_discharge_elevation_unit = base14.selectbox("Baseline discharge elevation unit", LENGTH_UNITS, index=LENGTH_UNITS.index(discharge_gauge_elevation_unit) if discharge_gauge_elevation_unit in LENGTH_UNITS else 0, key="hyd_field_baseline_discharge_elev_unit")
+            baseline_efficiency = base15.number_input("Baseline pump efficiency (fraction)", min_value=0.05, max_value=1.0, value=field_efficiency, key="hyd_field_baseline_efficiency")
+            baseline_expected_head_value = base16.number_input("Baseline expected TDH", min_value=0.0, value=expected_head_value if compare_expected_head else result.total_dynamic_head_m, key="hyd_field_baseline_expected_head")
+            baseline_expected_head_unit = st.selectbox("Baseline expected TDH unit", LENGTH_UNITS, index=LENGTH_UNITS.index(expected_head_unit) if compare_expected_head and expected_head_unit in LENGTH_UNITS else 0, key="hyd_field_baseline_expected_head_unit")
+
+            baseline_check = analyze_pump_field_check(
+                flow_m3_h=volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit),
+                density_kg_m3=density_kg_m3,
+                suction_pressure_value=baseline_suction_pressure_value,
+                suction_pressure_unit=baseline_suction_pressure_unit,
+                discharge_pressure_value=baseline_discharge_pressure_value,
+                discharge_pressure_unit=baseline_discharge_pressure_unit,
+                suction_pipe_id_mm=length_to_m(baseline_suction_pipe_id_value, baseline_suction_pipe_id_unit) * 1000.0,
+                discharge_pipe_id_mm=length_to_m(baseline_discharge_pipe_id_value, baseline_discharge_pipe_id_unit) * 1000.0,
+                suction_gauge_elevation_m=length_to_m(baseline_suction_elevation, baseline_suction_elevation_unit),
+                discharge_gauge_elevation_m=length_to_m(baseline_discharge_elevation, baseline_discharge_elevation_unit),
+                pump_efficiency_fraction=baseline_efficiency,
+                expected_system_head_m=length_to_m(baseline_expected_head_value, baseline_expected_head_unit) if compare_expected_head else None,
+                liquid_temperature_c=liquid_temp,
+            )
+            baseline_comparison = compare_pump_field_cases(
+                baseline_flow_m3_h=volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit),
+                baseline=baseline_check,
+                current_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+                current=field_check,
+            )
+            bc1, bc2, bc3, bc4 = st.columns(4)
+            bc1.metric("Flow change", f"{m3_h_to_volumetric_flow(baseline_comparison.flow_delta_m3_h, flow_unit):,.2f} {flow_unit}", delta=f"{baseline_comparison.flow_delta_fraction * 100.0:+.1f}%" if baseline_comparison.flow_delta_fraction is not None else None)
+            bc2.metric("Developed-head change", f"{m_to_length(baseline_comparison.developed_head_delta_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+            bc3.metric("Hydraulic-power change", f"{kw_to_power(baseline_comparison.hydraulic_power_delta_kw, power_unit):,.2f} {power_unit}")
+            if baseline_comparison.brake_power_delta_kw is not None:
+                bc4.metric("Brake-power change", f"{kw_to_power(baseline_comparison.brake_power_delta_kw, power_unit):,.2f} {power_unit}")
+            else:
+                bc4.metric("Brake-power change", "n/a")
+            bd1, bd2, bd3, bd4 = st.columns(4)
+            bd1.metric("Suction-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_pressure_delta_kpa, 'kPa'):,.2f} kPa")
+            bd2.metric("Discharge-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.discharge_pressure_delta_kpa, 'kPa'):,.2f} kPa")
+            if baseline_comparison.suction_margin_to_vapor_delta_kpa is not None:
+                bd3.metric("Suction-margin change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_margin_to_vapor_delta_kpa, 'kPa'):,.2f} kPa")
+            else:
+                bd3.metric("Suction-margin change", "n/a")
+            if baseline_comparison.expected_head_margin_delta_m is not None:
+                bd4.metric("Expected-TDH margin change", f"{m_to_length(baseline_comparison.expected_head_margin_delta_m, field_head_output_unit):,.2f} {field_head_output_unit}")
+            else:
+                bd4.metric("Expected-TDH margin change", "n/a")
+            _show_notes(baseline_comparison.notes)
+            with st.expander("Baseline case JSON"):
+                st.json(asdict(baseline_check))
+            with st.expander("Baseline comparison JSON"):
+                st.json(asdict(baseline_comparison))
+
+        curve_diag_enabled = st.checkbox("Enable measured-vs-curve diagnosis", value=False, key="hyd_field_curve_diag_enabled")
+        if curve_diag_enabled:
+            curve_diag_source = st.radio("Curve source for diagnosis", ["Built-in library", "Manual table"], horizontal=True, key="hyd_field_curve_diag_source")
+            curve_diag = None
+            if curve_diag_source == "Built-in library":
+                curve_diag_key = st.selectbox("Diagnosis curve", available_builtin_curve_options(), format_func=lambda key: get_builtin_curve(key).name, key="hyd_field_curve_diag_builtin")
+                curve_diag = get_builtin_curve(curve_diag_key)
+            else:
+                diag_table = pd.DataFrame([
+                    {"flow_m3_h": 0.0, "head_m": max(field_check.developed_head_m * 1.25, 10.0)},
+                    {"flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 0.6, 5.0), "head_m": max(field_check.developed_head_m * 1.1, 8.0)},
+                    {"flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit), 10.0), "head_m": max(field_check.developed_head_m, 5.0)},
+                    {"flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 1.35, 15.0), "head_m": max(field_check.developed_head_m * 0.7, 2.0)},
+                ])
+                edited_diag_table = st.data_editor(diag_table, num_rows="dynamic", use_container_width=True, key="hyd_field_curve_diag_manual")
+                curve_diag_name = st.text_input("Diagnosis curve name", value="Field reference curve", key="hyd_field_curve_diag_name")
+                curve_diag_family = st.text_input("Diagnosis curve family", value="Field troubleshooting", key="hyd_field_curve_diag_family")
+                curve_diag = build_pump_curve_from_xy_rows(curve_diag_name, edited_diag_table.to_dict(orient="records"), "flow_m3_h", "head_m", family=curve_diag_family)
+            if curve_diag is not None:
+                current_curve_diag = compare_measured_point_to_curve(
+                    curve_diag,
+                    measured_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+                    measured_head_m=field_check.developed_head_m,
+                )
+                curve_diag_rows = [{
+                    "Case": "Current",
+                    "Measured flow (m3/h)": current_curve_diag.measured_flow_m3_h,
+                    "Measured head (m)": current_curve_diag.measured_head_m,
+                    "Curve head at same flow (m)": current_curve_diag.curve_head_m,
+                    "Head delta vs curve (m)": current_curve_diag.head_delta_m,
+                    "Status": current_curve_diag.status,
+                }]
+                if baseline_enabled:
+                    baseline_curve_diag = compare_measured_point_to_curve(
+                        curve_diag,
+                        measured_flow_m3_h=volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit),
+                        measured_head_m=baseline_check.developed_head_m,
+                    )
+                    curve_diag_rows.append({
+                        "Case": "Baseline",
+                        "Measured flow (m3/h)": baseline_curve_diag.measured_flow_m3_h,
+                        "Measured head (m)": baseline_curve_diag.measured_head_m,
+                        "Curve head at same flow (m)": baseline_curve_diag.curve_head_m,
+                        "Head delta vs curve (m)": baseline_curve_diag.head_delta_m,
+                        "Status": baseline_curve_diag.status,
+                    })
+                st.dataframe(pd.DataFrame(curve_diag_rows), use_container_width=True)
+                curve_fig = go.Figure()
+                curve_fig.add_trace(go.Scatter(
+                    x=[point.flow_m3_h for point in curve_diag.points],
+                    y=[point.head_m for point in curve_diag.points],
+                    mode="lines+markers",
+                    name=curve_diag.name,
+                ))
+                curve_fig.add_trace(go.Scatter(
+                    x=[current_curve_diag.measured_flow_m3_h],
+                    y=[current_curve_diag.measured_head_m],
+                    mode="markers",
+                    marker=dict(size=12),
+                    name="Current measured case",
+                ))
+                if baseline_enabled:
+                    curve_fig.add_trace(go.Scatter(
+                        x=[baseline_curve_diag.measured_flow_m3_h],
+                        y=[baseline_curve_diag.measured_head_m],
+                        mode="markers",
+                        marker=dict(size=12, symbol="diamond"),
+                        name="Baseline measured case",
+                    ))
+                curve_fig.update_layout(title="Measured cases vs selected pump curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+                st.plotly_chart(curve_fig, use_container_width=True)
+                _show_notes(current_curve_diag.notes)
+                if baseline_enabled:
+                    _show_notes([f"Baseline: {note}" for note in baseline_curve_diag.notes])
+                with st.expander("Current field-check JSON"):
+                    st.json(asdict(field_check))
+                with st.expander("Curve diagnosis JSON"):
+                    st.json({
+                        "current": asdict(current_curve_diag),
+                        "baseline": asdict(baseline_curve_diag) if baseline_enabled else None,
+                    })
+        else:
+            with st.expander("Current field-check JSON"):
+                st.json(asdict(field_check))
 
     with tabs[3]:
         st.caption("Enter up to three sequential piping sections to estimate total system TDH and pressure drop.")
@@ -2503,9 +2732,9 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Hydraulics: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
         ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
-        ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+        ("active", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+        ("todo", "Hydraulics: add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow"),
     ])
 
     st.subheader("Next queued additions")
@@ -2515,6 +2744,8 @@ def render_roadmap() -> None:
         ("done", "Steam jets: add workbook preview auto-normalization and family / motive-basis filtering for imported curve families"),
         ("done", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
         ("done", "Hydraulics: add suction vessel + NPSHa scenario with optional NPSHr margin screening"),
+        ("done", "Hydraulics: add pump field troubleshooting check for suction/discharge gauge-based developed head and expected-TDH comparison"),
+        ("done", "Hydraulics: add current-vs-baseline pump case comparison and measured-vs-curve mismatch diagnosis"),
         ("done", "Crystallizers: add metastable-zone and supersaturation screening on top of citric solubility-based slurry"),
         ("done", "Hydraulics: add balancing-valve/orifice coefficient sizing from parallel branch split checks"),
         ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
