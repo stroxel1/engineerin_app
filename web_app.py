@@ -202,10 +202,9 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Evaporators: refine multi-effect staging with workbook-derived U calibration and cross-flow/backward-feed modes"),
-            ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
-            ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
-            ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+            ("done", "Evaporators: refine multi-effect staging with workbook-derived U calibration - landed"),
+            ("done", "Steam jets: vendor-specific workbook presets (Croll-Reynolds, Graham, S&K, GEA)"),
+            ("active", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -3178,10 +3177,11 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Evaporators: refine multi-effect staging with workbook-derived U calibration and cross-flow/backward-feed modes"),
-        ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
-        ("active", "Steam jets: vendor-specific workbook presets / mapping aids"),
-        ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
+        ("active", "Evaporators: body-by-body staging with inter-stage flow/temperature balance - landed"),
+        ("done", "Steam jets: vendor-specific workbook presets (Croll-Reynolds, Graham, S&K, GEA) with auto-detect"),
+        ("done", "Evaporator fouling/NCG allowance screening with U-degradation and delta-T penalty"),
+        ("done", "Pump hydraulics BEP proximity and instrument-bias screening"),
+        ("active", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
     ])
 
     st.subheader("Next queued additions")
