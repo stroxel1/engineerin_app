@@ -92,6 +92,7 @@ Default URL:
   - NPSHa screening
   - segmented suction/discharge system breakdowns
   - parallel branch entered-split check with branch head mismatch / throttling-loss estimate
+  - balancing-device screen for entered branch splits with required extra loss, equivalent Cv/Kv, and sharp-edge orifice diameter/beta estimate
   - self-balancing parallel branch flow solver for natural split screening
   - vessel/static-head screen
   - control-valve Cv/Kv sizing
@@ -100,6 +101,8 @@ Default URL:
 - Steam Jets
   - manual curve editor
   - operating-point screening vs curve
+  - workbook/CSV model-family import
+  - side-by-side comparison of multiple imported curves at one operating point
   - curve interpolation
   - % of curve and deviation view
   - thermo-compressor balance screen for suction load, motive steam demand, entrainment ratio, compression ratio, and discharge saturation temperature
@@ -112,8 +115,14 @@ Default URL:
   - feed/product/evaporation rate
   - boiling and condensing temperature screen
   - steam demand and steam economy
+  - design-calibrated U·A·ΔT capacity mode for existing evaporator bodies
+  - required area vs installed area screening with achievable evaporation/product concentration estimates
   - optional product-based BPE auto-fill for citric acid, fructose, dextrose, and sucrose liquors
 - Crystallizers
+  - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
+  - crystal-volume-percent slurry basis for citric crystallizers
+  - supersaturation / metastable-band screening from feed solids versus equilibrium mother liquor at operating temperature
+  - equilibrium-solids, absolute supersaturation, relative supersaturation, supersaturation-ratio, and solids-above-equilibrium metrics
   - crystal yield estimate
   - slurry and mother liquor estimate
   - circulation ratio
@@ -134,3 +143,4 @@ Default URL:
 - Quick Tools now include ratio-target blend solving so operators can back-calculate required dilution/addition rates from a desired final solids target.
 - Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.
 - Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.
+- Crystallizer supersaturation bands are user-entered screening thresholds, not first-principles metastable-zone property data.

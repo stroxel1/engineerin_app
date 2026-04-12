@@ -42,6 +42,18 @@ class CurveOperatingPointResult:
     notes: list[str]
 
 
+@dataclass
+class CurveComparisonRow:
+    curve_name: str
+    family: Optional[str]
+    source_sheet: Optional[str]
+    predicted_y: float
+    actual_y: float
+    percent_of_curve: float
+    deviation_pct: float
+    in_envelope: bool
+
+
 def sort_curve_points(points: List[CurvePoint]) -> List[CurvePoint]:
     return sorted(points, key=lambda point: point.x)
 
@@ -127,3 +139,59 @@ def make_curve_from_xy_rows(
         family=family,
         source_sheet=source_sheet,
     )
+
+
+def build_curve_library_from_table(
+    rows: List[dict],
+    x_label: str,
+    y_label: str,
+    curve_name_label: str,
+    family_label: Optional[str] = None,
+    source_sheet: Optional[str] = None,
+) -> CurveLibrary:
+    grouped_rows: Dict[tuple[str, Optional[str]], List[dict]] = {}
+    for row in rows:
+        curve_name = row.get(curve_name_label)
+        if curve_name in (None, ""):
+            continue
+        family = row.get(family_label) if family_label else None
+        key = (str(curve_name), None if family in (None, "") else str(family))
+        grouped_rows.setdefault(key, []).append(row)
+
+    curves: List[PerformanceCurve] = []
+    for (curve_name, family), curve_rows in grouped_rows.items():
+        try:
+            curves.append(
+                make_curve_from_xy_rows(
+                    name=curve_name,
+                    x_label=x_label,
+                    y_label=y_label,
+                    rows=curve_rows,
+                    family=family,
+                    source_sheet=source_sheet,
+                )
+            )
+        except ValueError:
+            continue
+
+    return CurveLibrary(curves=curves)
+
+
+def compare_curves_at_point(curves: List[PerformanceCurve], x_value: float, actual_y: float) -> List[CurveComparisonRow]:
+    comparison: List[CurveComparisonRow] = []
+    for curve in curves:
+        result = evaluate_operating_point(curve, x_value, actual_y)
+        comparison.append(
+            CurveComparisonRow(
+                curve_name=curve.name,
+                family=curve.family,
+                source_sheet=curve.source_sheet,
+                predicted_y=result.predicted_y,
+                actual_y=result.actual_y,
+                percent_of_curve=result.percent_of_curve,
+                deviation_pct=result.deviation_pct,
+                in_envelope=result.in_envelope,
+            )
+        )
+    comparison.sort(key=lambda row: abs(row.deviation_pct))
+    return comparison

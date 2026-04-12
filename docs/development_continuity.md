@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-11 15:58 CDT
+Last updated: 2026-04-11 20:37 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -9,12 +9,21 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `/Users/stephentroxel/Documents/projects/engineering_app`
 
 ## Current verified app URL
-- `http://127.0.0.1:8506`
+- `http://127.0.0.1:8592`
 - Verified HTTP status: 200 OK
+- Browser snapshot loaded the Dashboard and the Crystallizers page successfully with no browser console errors
 
 ## Current repo status
-- Working tree mostly clean
-- Untracked path:
+- Working tree currently has uncommitted edits in:
+  - `README.md`
+  - `core/crystallizers.py`
+  - `core/curves.py`
+  - `core/evaporators.py`
+  - `core/hydraulics.py`
+  - `docs/development_continuity.md`
+  - `web_app.py`
+- Untracked paths:
+  - `core/pump_curves.py`
   - `data/`
 - If resuming, inspect `git status --short` first
 
@@ -36,22 +45,39 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - NPSHa screen
    - segmented system breakdown
    - parallel branch balancing screen
+   - balancing-device Cv/Kv and equivalent-orifice sizing from entered split checks
    - vessel/static-head screen
    - control valve Cv/Kv sizing
    - cavitation/flashing screening
    - pump/system curve overlay
+   - built-in and uploaded pump-curve matching against system curves
 10. Hydraulics runtime bugs fixed:
    - local pandas shadowing bug on hydraulics page
    - missing `volumetric_flow_to_m3_h` import
    - missing `length_to_m` import
-11. Quick Tools expanded with:
+   - repaired corrupted `analyze_parallel_branches` self-balancing solver path
+11. Steam jets expanded with:
+   - workbook/CSV-driven model-family import
+   - grouped curve-library building from tabular vendor data
+   - side-by-side operating-point comparison across imported models
+12. Crystallizers expanded with:
+   - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
+   - crystal-volume-percent slurry basis for citric crystallizers
+   - supersaturation / metastable-band screening from feed solids versus equilibrium mother-liquor solids
+   - solids-above-equilibrium, supersaturation-ratio, and relative-supersaturation metrics
+   - residence-time suppression when no crystallization is predicted at the chosen temperature/DS basis
+13. Evaporators expanded with:
+   - design-calibrated U·A·ΔT capacity mode for installed bodies
+   - required area vs installed area screening
+   - achievable evaporation / concentration estimates from installed capacity
+14. Quick Tools expanded with:
    - blend tools
    - Brix reconciliation
    - tank inventory helpers
    - steam/electric utility cost screens
    - current-vs-proposed savings delta screens
    - ratio-target blend solver
-12. Dashboard and roadmap now show active work and completed items with strike-through formatting in-app
+15. Dashboard and roadmap now show active work and completed items with strike-through formatting in-app
 
 ## Most recent relevant commits
 - `d841a40` Add ratio-target blend quick tool
@@ -67,6 +93,9 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `core/steam.py`
 - `core/quicktools.py`
 - `core/hydraulics.py`
+- `core/curves.py`
+- `core/pump_curves.py`
+- `core/crystallizers.py`
 - `core/citric_bpe.py`
 - `core/solutions.py`
 - `core/tanks.py`
@@ -83,32 +112,38 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 
 ## Current active work focus
 1. Hydraulics refinement
-   - smarter branch-network balancing beyond fixed split assumptions
    - better suction/discharge vessel interaction with pump and NPSH workflows
-2. Evaporator enhancement planning
-   - design-calibrated evaporator mode from workbook-style logic
+   - next hydraulics tranche should add pump curve affinity / rerate screening from speed or impeller changes
+   - entered-split branch checks already estimate balancing-valve Cv/Kv and equivalent sharp-edge orifice size for branches that need extra throttling
+2. Steam jets
+   - workbook/CSV model-family import and side-by-side comparison now implemented
+   - next steam-jet tranche can add workbook normalization for vendor-specific layouts or motive-basis filters
+3. Crystallizers
+   - supersaturation / metastable-band screening is now implemented on top of citric solubility-based slurry
+   - next crystallizer tranche should use stronger product-specific solubility or supersaturation correlations if validated data become available
 
 ## Next high-value work items
 1. Hydraulics
    - suction/discharge vessel modeling refinement tied into pump/NPSH screens
-   - pump curve libraries or upload-based pump curves matched against system curves
-   - optional balancing-valve/orifice coefficient sizing from self-balancing branch results
-2. Evaporators
-   - design-calibrated evaporator mode from workbook logic
-3. Steam jets
-   - import workbook-derived curve families and compare multiple models
-4. Crystallizers
-   - stronger solubility / supersaturation correlations
+   - pump curve affinity / rerate screening from speed or impeller changes
+2. Steam jets
+   - vendor-layout normalization and motive-basis filtering for imported curve families
+3. Crystallizers
+   - replace screening-band heuristics with stronger validated product-specific supersaturation or metastable-zone data when available
+4. Evaporators
+   - refine calibrated mode with body-by-body staging, non-condensables/fouling allowances, or workbook-derived calibration inputs
 5. Quick tools
    - further plant economics / what-if screens as needed
 
 ## Known cautions
-- The app has had repeated runtime regressions from missing imports after feature additions. After edits, always run:
+- The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
   - compile check
   - direct Python import check
-  - live HTTP check
+  - focused runtime check for the edited calculator path
+  - live HTTP/browser check
 - Citric >60 DS estimate is still a screening model and should stay labeled accordingly
 - Parallel branch and vessel tools are first-pass engineering screens, not final design calculations
+- Crystallizer supersaturation bands are user-entered screening thresholds, not validated metastable-zone property data
 
 ## Resume checklist after disconnect
 1. `cd /Users/stephentroxel/Documents/projects/engineering_app`
@@ -123,5 +158,5 @@ import engineering_app.web_app
 print('import ok')
 PY`
 7. Check live app:
-   `curl -I -s http://127.0.0.1:8506`
+   `curl -I -s http://127.0.0.1:8592`
 8. Continue the active work focus instead of rediscovering completed work

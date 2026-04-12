@@ -12,9 +12,23 @@ import streamlit as st
 
 from engineering_app.core.cases import CaseStore
 from engineering_app.core.citric_bpe import estimate_capacity_impact_from_bpe, estimate_citric_bpe
-from engineering_app.core.crystallizers import CrystallizerInputs, estimate_crystallizer
-from engineering_app.core.curves import evaluate_operating_point, make_curve_from_xy_rows
-from engineering_app.core.evaporators import EvaporatorInputs, estimate_evaporation
+from engineering_app.core.crystallizers import (
+    CrystallizerInputs,
+    estimate_citric_solubility_wt_pct,
+    estimate_crystallizer,
+)
+from engineering_app.core.curves import (
+    build_curve_library_from_table,
+    compare_curves_at_point,
+    evaluate_operating_point,
+    make_curve_from_xy_rows,
+)
+from engineering_app.core.evaporators import (
+    EvaporatorDesignCalibrationInputs,
+    EvaporatorInputs,
+    estimate_design_calibrated_evaporation,
+    estimate_evaporation,
+)
 from engineering_app.core.hydraulics import (
     PipeSegment,
     analyze_parallel_branches,
@@ -28,10 +42,18 @@ from engineering_app.core.hydraulics import (
     find_pump_system_intersection,
     fitting_k_from_counts,
     recommend_schedule_10s_size,
+    size_branch_balancing_device,
     size_control_valve,
 )
 
 from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
+from engineering_app.core.pump_curves import (
+    available_builtin_curve_options,
+    build_curve_from_xy_rows as build_pump_curve_from_xy_rows,
+    find_curve_system_intersection,
+    get_builtin_curve,
+    scale_curve_by_affinity_laws,
+)
 from engineering_app.core.quicktools import (
     brix_reconciliation,
     dilution_water,
@@ -154,8 +176,8 @@ def render_dashboard() -> None:
         ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
         ("Hydraulics", "Line sizing, TDH, branches, vessels, valves, pump power, and NPSHa"),
         ("Steam jets", "Curve comparison and operating-point screening"),
-        ("Evaporators", "Duty, steam demand, and ΔT screen"),
-        ("Crystallizers", "Yield, slurry rate, circulation ratio, and residence time"),
+        ("Evaporators", "Duty, steam demand, ΔT, and design-calibrated U·A·ΔT capacity screening"),
+        ("Crystallizers", "Citric solubility-based mother liquor, crystal vol% slurry, yield, circulation ratio, and residence time"),
     ]
     for col, (title, desc) in zip(cols, cards):
         with col:
@@ -166,10 +188,10 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Hydraulics refinement: smarter parallel-branch balancing beyond fixed split entry"),
             ("active", "Hydraulics refinement: better vessel/suction/discharge interaction with pump and NPSH screens"),
-            ("todo", "Evaporator design-calibrated mode from workbook logic"),
-            ("todo", "Steam-jet workbook-driven model-family import"),
+            ("active", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
+            ("active", "Hydraulics refinement: pump curve affinity / rerate screening from speed or impeller changes"),
+            ("todo", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -177,10 +199,12 @@ def render_dashboard() -> None:
             ("done", "Solution BPE for citric, fructose, dextrose, and sucrose"),
             ("done", "Schedule 10S stainless hydraulics sizing from 1/2 in to 12 in"),
             ("done", "Valve/fitting K-factor counting and TDH breakdown"),
-            ("done", "Pump power, NPSHa, and segmented system screens"),
-            ("done", "Control-valve sizing with cavitation/flashing screening"),
             ("done", "Pump/system curve overlay"),
+            ("done", "Hydraulics pump curve library/upload matched against system curves"),
+            ("done", "Parallel branch balancing-device Cv/Kv and orifice sizing screen"),
+            ("done", "Citric crystallizer slurry basis plus supersaturation / metastable-band screening"),
             ("done", "Parallel branch and vessel/static-head screens"),
+            ("done", "Evaporator design-calibrated U·A·ΔT capacity mode"),
             ("done", "Quick utility cost screens plus current-vs-proposed savings deltas for steam and electricity"),
         ])
 
@@ -1233,6 +1257,48 @@ def render_hydraulics() -> None:
                 for branch in self_balancing_result.branches
             ])
             st.dataframe(self_balancing_df, use_container_width=True)
+
+            balance_device_rows = []
+            cd_col, orifice_unit_col = st.columns(2)
+            balancing_cd = cd_col.number_input(
+                "Balancing-orifice discharge coefficient Cd",
+                min_value=0.10,
+                max_value=1.00,
+                value=0.62,
+                step=0.01,
+                key="hyd_parallel_balance_cd",
+            )
+            orifice_output_unit = orifice_unit_col.selectbox(
+                "Balancing device diameter unit",
+                LENGTH_UNITS,
+                index=LENGTH_UNITS.index("mm") if "mm" in LENGTH_UNITS else 0,
+                key="hyd_parallel_balance_orifice_unit",
+            )
+            for segment, branch in zip(branches, branch_result.branches):
+                if branch.balancing_loss_m is None or branch.balancing_loss_m <= 0.05 or branch.flow_m3_h <= 0.0:
+                    continue
+                device = size_branch_balancing_device(
+                    branch=segment,
+                    branch_flow_m3_h=branch.flow_m3_h,
+                    density_kg_m3=density_kg_m3,
+                    required_additional_head_m=branch.balancing_loss_m,
+                    discharge_coefficient=balancing_cd,
+                )
+                balance_device_rows.append(
+                    {
+                        "Branch": device.branch_name,
+                        f"Needed extra loss ({head_unit})": m_to_length(device.required_additional_head_m, head_unit),
+                        f"Needed extra ΔP ({dp_unit})": _pressure_delta_from_kpa(device.required_additional_pressure_drop_kpa, dp_unit),
+                        "Required Kv": device.required_kv,
+                        "Required Cv": device.required_cv,
+                        f"Equivalent orifice ({orifice_output_unit})": m_to_length(device.equivalent_orifice_diameter_mm / 1000.0, orifice_output_unit) if device.equivalent_orifice_diameter_mm is not None else None,
+                        "Beta ratio": device.equivalent_orifice_beta_ratio,
+                        "Notes": " ".join(device.notes),
+                    }
+                )
+            if balance_device_rows:
+                st.caption("Balancing-device screen for branches that need extra throttling to hold the entered split")
+                st.dataframe(pd.DataFrame(balance_device_rows), use_container_width=True)
             _show_notes(self_balancing_result.notes)
         _show_notes(branch_result.notes)
 
@@ -1317,28 +1383,105 @@ def render_hydraulics() -> None:
         st.json(asdict(valve))
 
     with tabs[7]:
-        st.caption("Overlay a simple pump curve against the estimated system curve to visualize the operating point.")
-        p1, p2, p3 = st.columns(3)
-        shutoff_head = p1.number_input("Pump shutoff head (m)", min_value=0.1, value=max(result.total_dynamic_head_m * 1.6, 20.0), key="hyd_curve_shutoff")
-        max_flow_curve = p2.number_input("Pump max flow (m3/h)", min_value=1.0, value=max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 1.5, 10.0), key="hyd_curve_max_flow")
-        head_at_max_flow = p3.number_input("Pump head at max flow (m)", min_value=0.0, value=max(result.total_dynamic_head_m * 0.5, 1.0), key="hyd_curve_head_at_max")
-        static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head")
+        st.caption("Overlay a simple pump curve or a library/uploaded pump curve against the estimated system curve to visualize the operating point.")
+        curve_tabs = st.tabs(["Simple line", "Library / upload"])
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
-        k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
-        curve_points = build_system_curve(static_curve_head, k_factor, max_flow_curve)
-        intersection = find_pump_system_intersection(shutoff_head, head_at_max_flow, max_flow_curve, static_curve_head, k_factor)
-        xs = [point.flow_m3_h for point in curve_points]
-        system_heads = [point.total_dynamic_head_m for point in curve_points]
-        pump_heads = [shutoff_head + (head_at_max_flow - shutoff_head) * (x / max_flow_curve) for x in xs]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
-        fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
-        if intersection is not None:
-            fig.add_trace(go.Scatter(x=[intersection.flow_m3_h], y=[intersection.total_dynamic_head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
-            st.metric("Estimated operating flow", f"{intersection.flow_m3_h:,.1f} m3/h")
-            st.metric("Estimated operating head", f"{intersection.total_dynamic_head_m:,.2f} m")
-        fig.update_layout(title="Pump vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
-        st.plotly_chart(fig, use_container_width=True)
+
+        with curve_tabs[0]:
+            p1, p2, p3 = st.columns(3)
+            shutoff_head = p1.number_input("Pump shutoff head (m)", min_value=0.1, value=max(result.total_dynamic_head_m * 1.6, 20.0), key="hyd_curve_shutoff")
+            max_flow_curve = p2.number_input("Pump max flow (m3/h)", min_value=1.0, value=max(current_flow_m3_h * 1.5, 10.0), key="hyd_curve_max_flow")
+            head_at_max_flow = p3.number_input("Pump head at max flow (m)", min_value=0.0, value=max(result.total_dynamic_head_m * 0.5, 1.0), key="hyd_curve_head_at_max")
+            static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head")
+            k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
+            curve_points = build_system_curve(static_curve_head, k_factor, max_flow_curve)
+            intersection = find_pump_system_intersection(shutoff_head, head_at_max_flow, max_flow_curve, static_curve_head, k_factor)
+            xs = [point.flow_m3_h for point in curve_points]
+            system_heads = [point.total_dynamic_head_m for point in curve_points]
+            pump_heads = [shutoff_head + (head_at_max_flow - shutoff_head) * (x / max_flow_curve) for x in xs]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
+            fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
+            if intersection is not None:
+                fig.add_trace(go.Scatter(x=[intersection.flow_m3_h], y=[intersection.total_dynamic_head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                m1, m2 = st.columns(2)
+                m1.metric("Estimated operating flow", f"{intersection.flow_m3_h:,.1f} m3/h")
+                m2.metric("Estimated operating head", f"{intersection.total_dynamic_head_m:,.2f} m")
+            fig.update_layout(title="Pump vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with curve_tabs[1]:
+            st.caption("Use a built-in pump curve or upload vendor flow-head points from CSV/Excel, then compare that curve against the estimated system curve.")
+            static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head_adv")
+            k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
+            curve_source = st.radio("Pump curve source", ["Built-in library", "Upload CSV/Excel", "Manual table"], horizontal=True, key="hyd_curve_source")
+
+            selected_curve = None
+            uploaded_df = None
+
+            if curve_source == "Built-in library":
+                curve_key = st.selectbox("Built-in pump curve", available_builtin_curve_options(), format_func=lambda key: get_builtin_curve(key).name, key="hyd_curve_builtin")
+                selected_curve = get_builtin_curve(curve_key)
+                st.write(f"Family: {selected_curve.family}")
+                for note in selected_curve.notes:
+                    st.caption(note)
+            elif curve_source == "Upload CSV/Excel":
+                uploaded_curve = st.file_uploader("Upload pump curve table", type=["csv", "xlsx", "xlsm"], key="hyd_curve_upload")
+                if uploaded_curve is not None:
+                    suffix = Path(uploaded_curve.name).suffix.lower()
+                    if suffix == ".csv":
+                        uploaded_df = pd.read_csv(uploaded_curve)
+                    else:
+                        workbook = pd.ExcelFile(uploaded_curve)
+                        sheet_name = st.selectbox("Workbook sheet", workbook.sheet_names, key="hyd_curve_sheet")
+                        uploaded_df = pd.read_excel(workbook, sheet_name=sheet_name)
+                    if uploaded_df is not None and not uploaded_df.empty:
+                        st.dataframe(uploaded_df.head(15), use_container_width=True)
+                        columns = list(uploaded_df.columns)
+                        flow_col = st.selectbox("Flow column", columns, index=0, key="hyd_curve_upload_flow_col")
+                        head_col = st.selectbox("Head column", columns, index=1 if len(columns) > 1 else 0, key="hyd_curve_upload_head_col")
+                        curve_name = st.text_input("Curve name", value=Path(uploaded_curve.name).stem, key="hyd_curve_upload_name")
+                        curve_family = st.text_input("Curve family / pump tag", value="Uploaded vendor curve", key="hyd_curve_upload_family")
+                        selected_curve = build_pump_curve_from_xy_rows(curve_name, uploaded_df.to_dict(orient="records"), flow_col, head_col, family=curve_family)
+            else:
+                manual_curve = pd.DataFrame([
+                    {"flow_m3_h": 0.0, "head_m": max(result.total_dynamic_head_m * 1.7, 25.0)},
+                    {"flow_m3_h": max(current_flow_m3_h * 0.5, 10.0), "head_m": max(result.total_dynamic_head_m * 1.2, 15.0)},
+                    {"flow_m3_h": max(current_flow_m3_h, 20.0), "head_m": max(result.total_dynamic_head_m * 0.95, 8.0)},
+                    {"flow_m3_h": max(current_flow_m3_h * 1.35, 30.0), "head_m": max(result.total_dynamic_head_m * 0.65, 3.0)},
+                ])
+                edited_curve = st.data_editor(manual_curve, num_rows="dynamic", use_container_width=True, key="hyd_curve_manual_editor")
+                curve_name = st.text_input("Curve name", value="Manual pump curve", key="hyd_curve_manual_name")
+                curve_family = st.text_input("Curve family / pump tag", value="Manual entry", key="hyd_curve_manual_family")
+                selected_curve = build_pump_curve_from_xy_rows(curve_name, edited_curve.to_dict(orient="records"), "flow_m3_h", "head_m", family=curve_family)
+
+            if selected_curve is not None:
+                max_curve_flow = selected_curve.points[-1].flow_m3_h
+                system_curve_points = build_system_curve(static_curve_head, k_factor, max_curve_flow)
+                library_intersection = find_curve_system_intersection(selected_curve, static_curve_head, k_factor)
+                curve_df = pd.DataFrame([
+                    {"Flow (m3/h)": point.flow_m3_h, "Pump head (m)": point.head_m}
+                    for point in selected_curve.points
+                ])
+                st.dataframe(curve_df, use_container_width=True)
+                xs = [point.flow_m3_h for point in system_curve_points]
+                system_heads = [point.total_dynamic_head_m for point in system_curve_points]
+                pump_xs = [point.flow_m3_h for point in selected_curve.points]
+                pump_heads = [point.head_m for point in selected_curve.points]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
+                fig.add_trace(go.Scatter(x=pump_xs, y=pump_heads, mode="lines+markers", name=selected_curve.name))
+                if library_intersection is not None:
+                    fig.add_trace(go.Scatter(x=[library_intersection.flow_m3_h], y=[library_intersection.head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Estimated operating flow", f"{library_intersection.flow_m3_h:,.1f} m3/h")
+                    c2.metric("Estimated operating head", f"{library_intersection.head_m:,.2f} m")
+                    c3.metric("% of curve max flow", f"{library_intersection.fraction_of_curve_max_flow * 100.0:,.1f}%")
+                    if library_intersection.head_error_m > 1.0:
+                        st.warning("Pump/system intersection error is still noticeable on the sampled points. Add more curve points for better accuracy.")
+                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+                st.plotly_chart(fig, use_container_width=True)
+                _show_notes(selected_curve.notes)
 
     _remember_case(
         "hydraulics",
@@ -1372,7 +1515,7 @@ def render_hydraulics() -> None:
 
 def render_steam_jets() -> None:
     st.header("Steam Jets / Thermo-Compressors")
-    tabs = st.tabs(["Curve check", "Thermo-compressor balance"])
+    tabs = st.tabs(["Curve check", "Workbook family import", "Thermo-compressor balance"])
 
     with tabs[0]:
         st.write("Enter a performance curve and compare one operating point against it. Units are selectable and apply to the editor and displayed results.")
@@ -1427,6 +1570,114 @@ def render_steam_jets() -> None:
         )
 
     with tabs[1]:
+        st.write("Import a workbook or CSV that contains multiple steam-jet or thermo-compressor model curves, group them into curve families, and compare candidate models side-by-side at one operating point.")
+        f1, f2 = st.columns(2)
+        x_unit = f1.selectbox("Imported x-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_x_unit")
+        y_unit = f2.selectbox("Imported y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_y_unit")
+        uploaded_family = st.file_uploader("Upload steam-jet model-family table", type=["csv", "xlsx", "xlsm"], key="sj_family_upload")
+        family_df = None
+        source_sheet = None
+        if uploaded_family is None:
+            default_family_df = pd.DataFrame([
+                {"model": "TC-A", "family": "Motive 3.5 barg", "suction_load": 2000.0, "motive_steam": 3200.0},
+                {"model": "TC-A", "family": "Motive 3.5 barg", "suction_load": 4000.0, "motive_steam": 5000.0},
+                {"model": "TC-A", "family": "Motive 3.5 barg", "suction_load": 6000.0, "motive_steam": 7100.0},
+                {"model": "TC-B", "family": "Motive 3.5 barg", "suction_load": 2000.0, "motive_steam": 3000.0},
+                {"model": "TC-B", "family": "Motive 3.5 barg", "suction_load": 4000.0, "motive_steam": 4700.0},
+                {"model": "TC-B", "family": "Motive 3.5 barg", "suction_load": 6000.0, "motive_steam": 6800.0},
+                {"model": "TC-C", "family": "Motive 5.0 barg", "suction_load": 2000.0, "motive_steam": 2800.0},
+                {"model": "TC-C", "family": "Motive 5.0 barg", "suction_load": 4000.0, "motive_steam": 4450.0},
+                {"model": "TC-C", "family": "Motive 5.0 barg", "suction_load": 6000.0, "motive_steam": 6500.0},
+            ])
+            st.caption("No file uploaded yet, so a built-in multi-model example table is shown below.")
+            family_df = st.data_editor(default_family_df, num_rows="dynamic", use_container_width=True, key="sj_family_default_editor")
+            source_sheet = "manual-family-table"
+        else:
+            suffix = Path(uploaded_family.name).suffix.lower()
+            if suffix == ".csv":
+                family_df = pd.read_csv(uploaded_family)
+                source_sheet = uploaded_family.name
+            else:
+                workbook = pd.ExcelFile(uploaded_family)
+                source_sheet = st.selectbox("Workbook sheet", workbook.sheet_names, key="sj_family_sheet")
+                family_df = pd.read_excel(workbook, sheet_name=source_sheet)
+            st.dataframe(family_df.head(20), use_container_width=True)
+
+        if family_df is not None and not family_df.empty:
+            columns = list(family_df.columns)
+            family_options = ["(none)"] + columns
+            default_name_index = next((idx for idx, col in enumerate(columns) if str(col).lower() in {"model", "curve", "curve_name", "model_name", "tag", "name"}), 0)
+            default_family_index = next((idx + 1 for idx, col in enumerate(columns) if "family" in str(col).lower() or "basis" in str(col).lower()), 0)
+            default_x_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["load", "suction", "capacity", "flow"])), 0)
+            default_y_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["steam", "motive", "consumption", "head", "duty"])), min(1, len(columns) - 1))
+            c1, c2, c3, c4 = st.columns(4)
+            curve_name_col = c1.selectbox("Curve/model name column", columns, index=default_name_index, key="sj_family_curve_name_col")
+            family_col = c2.selectbox("Family column", family_options, index=default_family_index, key="sj_family_family_col")
+            x_col = c3.selectbox("X column", columns, index=default_x_index, key="sj_family_x_col")
+            y_col = c4.selectbox("Y column", columns, index=default_y_index, key="sj_family_y_col")
+            family_label = None if family_col == "(none)" else family_col
+            library = build_curve_library_from_table(
+                family_df.to_dict(orient="records"),
+                x_label=x_col,
+                y_label=y_col,
+                curve_name_label=curve_name_col,
+                family_label=family_label,
+                source_sheet=source_sheet,
+            )
+            st.metric("Imported curves", f"{len(library.curves)}")
+            if library.curves:
+                curve_labels = [f"{curve.name} ({curve.family or 'no family'})" for curve in library.curves]
+                selected_labels = st.multiselect("Curves to compare", curve_labels, default=curve_labels[: min(3, len(curve_labels))], key="sj_family_selected")
+                selected_curves = [curve for curve in library.curves if f"{curve.name} ({curve.family or 'no family'})" in selected_labels]
+                operating_x = st.number_input("Comparison x-value", value=5000.0, key="sj_family_operating_x")
+                actual_y = st.number_input("Actual y-value for comparison", value=6200.0, key="sj_family_actual_y")
+                if selected_curves:
+                    comparison_rows = compare_curves_at_point(selected_curves, operating_x, actual_y)
+                    compare_df = pd.DataFrame([
+                        {
+                            "Curve": row.curve_name,
+                            "Family": row.family or "",
+                            f"Predicted y ({y_unit})": row.predicted_y,
+                            f"Actual y ({y_unit})": row.actual_y,
+                            "% of curve": row.percent_of_curve,
+                            "Deviation %": row.deviation_pct,
+                            "In envelope": row.in_envelope,
+                        }
+                        for row in comparison_rows
+                    ])
+                    st.dataframe(compare_df, use_container_width=True)
+                    fig = go.Figure()
+                    for curve in selected_curves:
+                        xs = [point.x for point in curve.points]
+                        ys = [point.y for point in curve.points]
+                        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines+markers", name=f"{curve.name} ({curve.family or 'no family'})"))
+                    fig.add_trace(go.Scatter(x=[operating_x] * len(comparison_rows), y=[row.predicted_y for row in comparison_rows], mode="markers", marker=dict(size=11), name="Predicted points"))
+                    fig.add_trace(go.Scatter(x=[operating_x], y=[actual_y], mode="markers", marker=dict(size=12, symbol="diamond"), name="Actual point"))
+                    fig.update_layout(title="Steam-jet model-family comparison", xaxis_title=f"{x_col} ({x_unit})", yaxis_title=f"{y_col} ({y_unit})")
+                    st.plotly_chart(fig, use_container_width=True)
+                    best_match = comparison_rows[0]
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Closest curve", best_match.curve_name)
+                    m2.metric("Closest family", best_match.family or "n/a")
+                    m3.metric("Closest deviation", f"{best_match.deviation_pct:,.1f}%")
+                    _remember_case(
+                        "steam-jets-model-family-compare",
+                        {
+                            "source_sheet": source_sheet,
+                            "curve_name_col": curve_name_col,
+                            "family_col": family_label,
+                            "x_col": x_col,
+                            "y_col": y_col,
+                            "operating_x": operating_x,
+                            "actual_y": actual_y,
+                            "selected_curves": [curve.name for curve in selected_curves],
+                        },
+                        {"comparison_rows": compare_df.to_dict(orient="records")},
+                    )
+            else:
+                st.warning("No valid curves could be built from the selected columns. Check that each model has at least two numeric x/y rows.")
+
+    with tabs[2]:
         st.write("Screen a thermo-compressor from suction vapor load and pressure lift using a simple adiabatic steam-mixing balance. Use vendor curves before equipment selection.")
         b1, b2, b3, b4 = st.columns(4)
         suction_flow_value = b1.number_input("Suction vapor flow", min_value=0.1, value=5000.0, key="sj_balance_suction_flow")
@@ -1656,16 +1907,20 @@ def render_steam() -> None:
 
 def render_evaporators() -> None:
     st.header("Evaporators")
+    st.caption("Screen target evaporation duty or estimate achievable performance from installed U·A·ΔT for an existing body.")
+
     c1, c2, c3, c4 = st.columns(4)
     feed_rate = c1.number_input("Feed rate", value=25000.0, key="ev_feed_rate")
     feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="ev_feed_rate_unit")
     feed_solids = c3.number_input("Feed solids (wt%)", value=12.0, key="ev_feed_solids")
     product_solids = c4.number_input("Product solids (wt%)", value=50.0, key="ev_prod_solids")
+
     c5, c6, c7, c8 = st.columns(4)
     steam_pressure = c5.number_input("Steam pressure", value=3.5, key="ev_steam_pressure")
     steam_pressure_unit = c6.selectbox("Steam pressure unit", PRESSURE_UNITS, index=4, key="ev_steam_pressure_unit")
     operating_pressure = c7.number_input("Operating pressure", value=20.0, key="ev_operating_pressure")
     operating_pressure_unit = c8.selectbox("Operating pressure unit", PRESSURE_UNITS, index=0, key="ev_operating_pressure_unit")
+
     c9, c10, c11, c12 = st.columns(4)
     passes = int(c9.number_input("Passes", min_value=1, value=2, step=1, key="ev_passes"))
     recirc = c10.number_input("Recirculation ratio", value=4.0, key="ev_recirc")
@@ -1676,7 +1931,14 @@ def render_evaporators() -> None:
         key="ev_product",
     )
     duty_per_kg = c12.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_spec_duty")
+
+    output1, output2, output3, output4 = st.columns(4)
+    output_flow_unit = output1.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_flow_out")
+    output_temp_unit = output2.selectbox("Output temperature unit", TEMPERATURE_UNITS, index=0, key="ev_temp_out")
+    delta_t_unit = output3.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_dt_out")
+    duty_output_unit = output4.selectbox("Duty output unit", POWER_UNITS, index=0, key="ev_duty_out")
     bpe_unit = st.selectbox("Displayed BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_bpe_unit")
+
     if evaporator_product == "citric_acid":
         citric = estimate_citric_bpe(product_solids, operating_pressure, operating_pressure_unit, method="auto")
         bpe_c = citric.bpe_c
@@ -1686,64 +1948,195 @@ def render_evaporators() -> None:
         auto_props = solution_properties(evaporator_product, product_solids, 45.0, operating_pressure, operating_pressure_unit)
         bpe_c = auto_props.estimated_bpe_c
         st.caption(f"Auto-estimated BPE for {PRODUCT_PROFILES[evaporator_product].display_name}: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
-    output_flow_unit = st.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_flow_out")
-    output_temp_unit = st.selectbox("Output temperature unit", TEMPERATURE_UNITS, index=0, key="ev_temp_out")
-    delta_t_unit = st.selectbox("ΔT output unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_dt_out")
-    duty_output_unit = st.selectbox("Duty output unit", POWER_UNITS, index=0, key="ev_duty_out")
-    result = estimate_evaporation(
-        EvaporatorInputs(
-            feed_rate_value=feed_rate,
-            feed_rate_unit=feed_rate_unit,
-            feed_solids_wt_pct=feed_solids,
-            product_solids_wt_pct=product_solids,
-            steam_pressure_value=steam_pressure,
-            steam_pressure_unit=steam_pressure_unit,
-            operating_pressure_value=operating_pressure,
-            operating_pressure_unit=operating_pressure_unit,
-            passes=passes,
-            recirculation_ratio=recirc,
-            bpe_c=bpe_c,
-            estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
+
+    tabs = st.tabs(["Target duty", "Design-calibrated mode"])
+
+    with tabs[0]:
+        result = estimate_evaporation(
+            EvaporatorInputs(
+                feed_rate_value=feed_rate,
+                feed_rate_unit=feed_rate_unit,
+                feed_solids_wt_pct=feed_solids,
+                product_solids_wt_pct=product_solids,
+                steam_pressure_value=steam_pressure,
+                steam_pressure_unit=steam_pressure_unit,
+                operating_pressure_value=operating_pressure,
+                operating_pressure_unit=operating_pressure_unit,
+                passes=passes,
+                recirculation_ratio=recirc,
+                bpe_c=bpe_c,
+                estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
+            )
         )
-    )
-    df = pd.DataFrame(
-        [
-            {"Stream": "Feed", "value": kg_h_to_mass_flow(result.feed_rate_kg_h, output_flow_unit)},
-            {"Stream": "Product", "value": kg_h_to_mass_flow(result.product_rate_kg_h, output_flow_unit)},
-            {"Stream": "Evaporation", "value": kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit)},
-            {"Stream": "Steam", "value": kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit)},
-        ]
-    )
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Evaporation", f"{kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    m2.metric("Steam flow", f"{kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    m3.metric("Boiling temp", f"{_display_temperature(result.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
-    m4.metric("ΔT", f"{_display_delta_t(result.delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
-    st.metric("Duty", f"{kw_to_power(result.estimated_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
-    st.plotly_chart(px.bar(df, x="Stream", y="value", title=f"Evaporator Streams ({output_flow_unit})"), use_container_width=True)
-    _show_notes(result.notes)
+        df = pd.DataFrame(
+            [
+                {"Stream": "Feed", "value": kg_h_to_mass_flow(result.feed_rate_kg_h, output_flow_unit)},
+                {"Stream": "Product", "value": kg_h_to_mass_flow(result.product_rate_kg_h, output_flow_unit)},
+                {"Stream": "Evaporation", "value": kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit)},
+                {"Stream": "Steam", "value": kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit)},
+            ]
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Evaporation", f"{kg_h_to_mass_flow(result.evaporation_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m2.metric("Steam flow", f"{kg_h_to_mass_flow(result.estimated_steam_flow_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m3.metric("Boiling temp", f"{_display_temperature(result.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+        m4.metric("ΔT", f"{_display_delta_t(result.delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
+        n1, n2 = st.columns(2)
+        n1.metric("Duty", f"{kw_to_power(result.estimated_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
+        n2.metric("Steam economy", f"{result.steam_economy_kg_evap_per_kg_steam:,.2f} kg/kg")
+        st.plotly_chart(px.bar(df, x="Stream", y="value", title=f"Evaporator Streams ({output_flow_unit})"), use_container_width=True)
+        _show_notes(result.notes)
+        _remember_case("evaporators-target-duty", {
+            "feed_rate": feed_rate,
+            "feed_rate_unit": feed_rate_unit,
+            "feed_solids": feed_solids,
+            "product_solids": product_solids,
+            "steam_pressure": steam_pressure,
+            "steam_pressure_unit": steam_pressure_unit,
+            "operating_pressure": operating_pressure,
+            "operating_pressure_unit": operating_pressure_unit,
+            "passes": passes,
+            "recirc": recirc,
+            "product": evaporator_product,
+            "specific_evaporation_duty_kj_kg": duty_per_kg,
+            "bpe_c": bpe_c,
+        }, asdict(result))
+
+    with tabs[1]:
+        st.caption("Estimate whether the installed evaporator body can actually reach the entered target concentration at the current pressure basis.")
+        d1, d2, d3 = st.columns(3)
+        overall_u = d1.number_input("Overall U (W/m²·K)", min_value=0.0, value=1800.0, key="ev_cal_u")
+        installed_area = d2.number_input("Installed area (m²)", min_value=0.0, value=250.0, key="ev_cal_area")
+        availability_pct = d3.number_input("Availability / cleanliness (%)", min_value=0.0, value=85.0, key="ev_cal_availability")
+
+        calibrated = estimate_design_calibrated_evaporation(
+            EvaporatorDesignCalibrationInputs(
+                feed_rate_value=feed_rate,
+                feed_rate_unit=feed_rate_unit,
+                feed_solids_wt_pct=feed_solids,
+                target_product_solids_wt_pct=product_solids,
+                steam_pressure_value=steam_pressure,
+                steam_pressure_unit=steam_pressure_unit,
+                operating_pressure_value=operating_pressure,
+                operating_pressure_unit=operating_pressure_unit,
+                bpe_c=bpe_c,
+                estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
+                overall_u_w_m2_k=overall_u,
+                installed_area_m2=installed_area,
+                availability_factor=availability_pct / 100.0,
+            )
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Target evaporation", f"{kg_h_to_mass_flow(calibrated.target_evaporation_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m2.metric("Achievable evaporation", f"{kg_h_to_mass_flow(calibrated.achievable_evaporation_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m3.metric("Required duty", f"{kw_to_power(calibrated.required_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
+        m4.metric("Available duty", f"{kw_to_power(calibrated.available_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
+
+        n1, n2, n3, n4 = st.columns(4)
+        n1.metric("Required area", f"{calibrated.required_area_m2:,.1f} m²")
+        n2.metric("Area utilization", f"{calibrated.area_utilization_fraction * 100.0:,.1f} %")
+        n3.metric("Achievable product rate", f"{kg_h_to_mass_flow(calibrated.achievable_product_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        achievable_product_solids = calibrated.dissolved_solids_kg_h / max(calibrated.achievable_product_rate_kg_h, 1e-9) * 100.0
+        n4.metric("Achievable product solids", f"{achievable_product_solids:,.2f} wt%")
+
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Boiling temp", f"{_display_temperature(calibrated.boiling_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+        p2.metric("Condensing temp", f"{_display_temperature(calibrated.condensing_temperature_c, output_temp_unit):,.2f} °{output_temp_unit}")
+        p3.metric("Available ΔT", f"{_display_delta_t(calibrated.delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
+        p4.metric("Available steam flow", f"{kg_h_to_mass_flow(calibrated.available_steam_flow_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+
+        compare_df = pd.DataFrame([
+            {"Case": "Target", f"Evaporation ({output_flow_unit})": kg_h_to_mass_flow(calibrated.target_evaporation_rate_kg_h, output_flow_unit), f"Duty ({duty_output_unit})": kw_to_power(calibrated.required_duty_kw, duty_output_unit), "Product solids (wt%)": product_solids},
+            {"Case": "Achievable", f"Evaporation ({output_flow_unit})": kg_h_to_mass_flow(calibrated.achievable_evaporation_rate_kg_h, output_flow_unit), f"Duty ({duty_output_unit})": kw_to_power(calibrated.available_duty_kw, duty_output_unit), "Product solids (wt%)": achievable_product_solids},
+        ])
+        st.dataframe(compare_df, use_container_width=True)
+        _show_notes(calibrated.notes)
+        _remember_case("evaporators-design-calibrated", {
+            "feed_rate": feed_rate,
+            "feed_rate_unit": feed_rate_unit,
+            "feed_solids": feed_solids,
+            "product_solids": product_solids,
+            "steam_pressure": steam_pressure,
+            "steam_pressure_unit": steam_pressure_unit,
+            "operating_pressure": operating_pressure,
+            "operating_pressure_unit": operating_pressure_unit,
+            "product": evaporator_product,
+            "specific_evaporation_duty_kj_kg": duty_per_kg,
+            "bpe_c": bpe_c,
+            "overall_u_w_m2_k": overall_u,
+            "installed_area_m2": installed_area,
+            "availability_pct": availability_pct,
+        }, asdict(calibrated))
 
 
 
 def render_crystallizers() -> None:
     st.header("Crystallizers")
-    c1, c2, c3, c4 = st.columns(4)
+    st.caption("For citric acid, slurry can now be based on crystal volume percent while mother liquor is auto-set from temperature-dependent solubility and screened for supersaturation / metastable-band risk.")
+    c0, c1, c2, c3 = st.columns(4)
+    product = c0.selectbox("Product", ["citric_acid", "generic"], format_func=lambda value: "Citric acid" if value == "citric_acid" else "Generic liquor", key="cr_product")
     feed_rate = c1.number_input("Feed rate", value=12000.0, key="cr_feed_rate")
     feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="cr_feed_rate_unit")
     feed_solids = c3.number_input("Feed solids (wt%)", value=55.0, key="cr_feed_solids")
-    mother_liquor_solids = c4.number_input("Mother liquor solids (wt%)", value=45.0, key="cr_mother_solids")
-    c5, c6, c7, c8 = st.columns(4)
-    slurry_solids = c5.number_input("Target slurry solids (wt%)", value=25.0, key="cr_slurry_solids")
-    circulation = c6.number_input("Circulation rate", value=72000.0, key="cr_circulation")
-    circulation_unit = c7.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
-    operating_temp = c8.number_input("Operating temperature", value=45.0, key="cr_temp")
-    c9, c10, c11, c12 = st.columns(4)
-    operating_temp_unit = c9.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
-    working_volume = c10.number_input("Working volume", value=18.0, key="cr_working_volume")
-    working_volume_unit = c11.selectbox("Working volume unit", VOLUME_UNITS, index=0, key="cr_working_volume_unit")
-    output_flow_unit = c12.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
-    residence_unit = st.selectbox("Residence-time output unit", TIME_UNITS, index=2, key="cr_time_out")
+
+    c4, c5, c6, c7 = st.columns(4)
+    basis_mode = c4.radio("Slurry basis", ["Crystal vol%", "Crystal wt%"], horizontal=True, key="cr_basis_mode")
+    operating_temp = c5.number_input("Operating temperature", value=45.0, key="cr_temp")
+    operating_temp_unit = c6.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
+    circulation = c7.number_input("Circulation rate", value=72000.0, key="cr_circulation")
+
+    c8, c9, c10, c11 = st.columns(4)
+    circulation_unit = c8.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
+    slurry_withdrawal = c9.number_input("Slurry withdrawal rate", min_value=0.0, value=12000.0, key="cr_slurry_withdrawal")
+    slurry_withdrawal_unit = c10.selectbox("Slurry withdrawal unit", MASS_FLOW_UNITS, index=0, key="cr_slurry_withdrawal_unit")
+    output_flow_unit = c11.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
+
+    c12, c13 = st.columns(2)
+    working_volume = c12.number_input("Working volume", value=18.0, key="cr_working_volume")
+    working_volume_unit = c13.selectbox("Working volume unit", VOLUME_UNITS, index=0, key="cr_working_volume_unit")
+
     temp_c = operating_temp if operating_temp_unit == "C" else (operating_temp - 32.0) * 5.0 / 9.0
+    auto_mother_liquor_solids = estimate_citric_solubility_wt_pct(temp_c) if product == "citric_acid" else None
+
+    d1, d2, d3, d4 = st.columns(4)
+    if basis_mode == "Crystal vol%":
+        target_crystal_volume_pct = d1.number_input("Target crystals in slurry (vol%)", value=18.0, key="cr_target_vol_pct")
+        slurry_solids = d2.number_input("Displayed slurry crystals (wt%)", value=25.0, key="cr_slurry_solids_display")
+    else:
+        slurry_solids = d1.number_input("Target slurry crystals (wt%)", value=25.0, key="cr_slurry_solids")
+        target_crystal_volume_pct = None
+        d2.caption("Weight-percent basis keeps the older quick-screen approach.")
+    mother_liquor_solids = d3.number_input(
+        "Mother liquor solids (wt%)",
+        value=auto_mother_liquor_solids if auto_mother_liquor_solids is not None else 45.0,
+        key="cr_mother_solids",
+        disabled=product == "citric_acid",
+    )
+    yield_unit = d4.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
+
+    e1, e2 = st.columns(2)
+    crystal_density = e1.number_input("Crystal density (kg/m3)", value=1660.0, key="cr_crystal_density")
+    mother_liquor_density = e2.number_input("Mother liquor density (kg/m3)", value=1280.0, key="cr_ml_density")
+
+    f1, f2 = st.columns(2)
+    supersat_screen_band_pct = f1.number_input(
+        "Controllable supersaturation band upper limit (%)",
+        min_value=0.0,
+        value=10.0,
+        step=1.0,
+        key="cr_supersat_band_pct",
+        help="User-entered screening band for relative supersaturation = (feed solids - equilibrium solids) / equilibrium solids.",
+    )
+    supersat_high_warning_pct = f2.number_input(
+        "High supersaturation warning limit (%)",
+        min_value=supersat_screen_band_pct,
+        value=max(supersat_screen_band_pct + 10.0, 20.0),
+        step=1.0,
+        key="cr_supersat_high_pct",
+        help="Above this relative supersaturation band, expect a stronger fines / spontaneous nucleation tendency unless the crystallizer and classification loop are robust.",
+    )
+
     result = estimate_crystallizer(
         CrystallizerInputs(
             feed_rate_value=feed_rate,
@@ -1756,18 +2149,74 @@ def render_crystallizers() -> None:
             working_volume_value=working_volume,
             working_volume_unit=working_volume_unit,
             operating_temperature_c=temp_c,
+            product=product,
+            crystal_density_kg_m3=crystal_density,
+            mother_liquor_density_kg_m3=mother_liquor_density,
+            target_crystal_volume_pct=target_crystal_volume_pct,
+            slurry_withdrawal_rate_value=slurry_withdrawal,
+            slurry_withdrawal_rate_unit=slurry_withdrawal_unit,
+            supersaturation_screen_band_relative=supersat_screen_band_pct / 100.0,
+            supersaturation_high_warning_relative=supersat_high_warning_pct / 100.0,
         )
     )
-    yield_unit = st.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
+
+    if product == "citric_acid":
+        st.caption(f"Auto mother-liquor basis from published citric-acid water solubility data: {result.mother_liquor_solids_wt_pct:,.2f} wt% at {temp_c:,.1f} °C.")
+
+    residence_unit = st.selectbox("Residence-time output unit", TIME_UNITS, index=2, key="cr_time_out")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Crystals", f"{kg_h_to_mass_flow(result.crystals_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
     m2.metric("Mother liquor", f"{kg_h_to_mass_flow(result.mother_liquor_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    m3.metric("Circulation ratio", f"{result.circulation_ratio:,.2f}")
-    if result.residence_time_h is not None:
+    m3.metric("Crystal mass % in slurry", f"{result.slurry_crystal_mass_fraction * 100.0:,.2f} wt%")
+    if result.slurry_crystal_volume_fraction is not None:
+        m4.metric("Crystal volume % in slurry", f"{result.slurry_crystal_volume_fraction * 100.0:,.2f} vol%")
+    elif result.residence_time_h is not None:
         residence_s = result.residence_time_h * 3600.0
         m4.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
-    st.metric("Yield", f"{_display_percent(result.yield_fraction_of_feed_solids, yield_unit):,.2f} {yield_unit}")
+
+    n1, n2, n3, n4 = st.columns(4)
+    if result.residence_time_h is not None:
+        residence_s = result.residence_time_h * 3600.0
+        n1.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
+    n2.metric("Slurry withdrawal", f"{kg_h_to_mass_flow(result.slurry_withdrawal_rate_kg_h if result.slurry_withdrawal_rate_kg_h is not None else result.estimated_slurry_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    n3.metric("Circulation ratio", f"{result.circulation_ratio:,.2f}")
+    n4.metric("Yield", f"{_display_percent(result.yield_fraction_of_feed_solids, yield_unit):,.2f} {yield_unit}")
+
+    st.subheader("Supersaturation screen")
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Equilibrium mother liquor", f"{result.equilibrium_solids_wt_pct:,.2f} wt%")
+    s2.metric("Absolute supersaturation", f"{result.absolute_supersaturation_wt_pct:,.2f} wt%")
+    s3.metric("Relative supersaturation", f"{result.relative_supersaturation * 100.0:,.1f} %")
+    s4.metric("Supersaturation ratio", f"{result.supersaturation_ratio:,.3f}")
+    t1, t2 = st.columns(2)
+    t1.metric("Solids above equilibrium", f"{kg_h_to_mass_flow(result.solids_above_equilibrium_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+    t2.metric("Supersaturation zone", result.supersaturation_zone)
+    st.caption(
+        f"Screening bands: controllable <= {supersat_screen_band_pct:,.1f}% relative supersaturation; high-warning > {supersat_high_warning_pct:,.1f}% relative supersaturation."
+    )
     _show_notes(result.notes)
+    _remember_case("crystallizers", {
+        "product": product,
+        "feed_rate": feed_rate,
+        "feed_rate_unit": feed_rate_unit,
+        "feed_solids": feed_solids,
+        "operating_temp": operating_temp,
+        "operating_temp_unit": operating_temp_unit,
+        "basis_mode": basis_mode,
+        "target_crystal_volume_pct": target_crystal_volume_pct,
+        "target_slurry_solids_wt_pct": slurry_solids,
+        "mother_liquor_solids_wt_pct": mother_liquor_solids,
+        "circulation": circulation,
+        "circulation_unit": circulation_unit,
+        "slurry_withdrawal": slurry_withdrawal,
+        "slurry_withdrawal_unit": slurry_withdrawal_unit,
+        "working_volume": working_volume,
+        "working_volume_unit": working_volume_unit,
+        "crystal_density_kg_m3": crystal_density,
+        "mother_liquor_density_kg_m3": mother_liquor_density,
+        "supersaturation_screen_band_pct": supersat_screen_band_pct,
+        "supersaturation_high_warning_pct": supersat_high_warning_pct,
+    }, asdict(result))
 
 
 
@@ -1856,21 +2305,26 @@ def render_roadmap() -> None:
         ("done", "Case manager added"),
         ("done", "Solution BPE tools added for citric, fructose, dextrose, and sucrose"),
         ("done", "Hydraulics core expanded with schedule 10S sizing, valves/fittings, TDH, pump power, NPSHa, segmented systems, control valves, pump/system curve, branch screens, and vessel head tools"),
+        ("done", "Hydraulics pump curve library/upload added for system-curve matching"),
+        ("done", "Citric crystallizer slurry basis updated to use crystal vol% plus solubility-based mother liquor and supersaturation screening"),
         ("done", "Quick tools expanded with blending, Brix reconciliation, tank inventory, utility cost screens, and current-vs-proposed utility deltas"),
     ])
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Hydraulics: improve branch-network balancing beyond fixed split assumptions"),
         ("active", "Hydraulics: strengthen suction/discharge vessel interaction with pump and NPSH workflows"),
+        ("active", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
+        ("active", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
     ])
 
     st.subheader("Next queued additions")
     _render_status_lines([
         ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
-        ("todo", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
-        ("todo", "Evaporators: add design-calibrated evaporator mode from workbook logic"),
-        ("todo", "Crystallizers: add stronger citric/fructose solubility and supersaturation screens"),
+        ("todo", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
+        ("todo", "Hydraulics: refine suction/discharge vessel handling around pump/NPSH workflows"),
+        ("done", "Crystallizers: add metastable-zone and supersaturation screening on top of citric solubility-based slurry"),
+        ("done", "Hydraulics: add balancing-valve/orifice coefficient sizing from parallel branch split checks"),
+        ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
         ("done", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
     ])
 

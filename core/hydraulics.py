@@ -177,6 +177,20 @@ class ParallelBranchBalanceResult:
     notes: list[str]
 
 
+@dataclass
+class BranchBalancingDeviceResult:
+    branch_name: str
+    branch_flow_m3_h: float
+    required_additional_head_m: float
+    required_additional_pressure_drop_kpa: float
+    required_kv: float
+    required_cv: float
+    equivalent_orifice_diameter_mm: float | None
+    equivalent_orifice_beta_ratio: float | None
+    discharge_coefficient: float
+    notes: list[str]
+
+
 def _friction_factor_swamee_jain(reynolds_number: float, roughness_m: float, diameter_m: float) -> float:
     if reynolds_number <= 0:
         raise ValueError("Reynolds number must be positive")
@@ -609,6 +623,62 @@ def _calculate_branch_result(
     )
 
 
+def size_branch_balancing_device(
+    branch: PipeSegment,
+    branch_flow_m3_h: float,
+    density_kg_m3: float,
+    required_additional_head_m: float,
+    discharge_coefficient: float = 0.62,
+) -> BranchBalancingDeviceResult:
+    if branch_flow_m3_h <= 0.0:
+        raise ValueError("Branch flow must be positive for balancing-device sizing.")
+    if density_kg_m3 <= 0.0:
+        raise ValueError("Density must be positive for balancing-device sizing.")
+    if required_additional_head_m <= 0.0:
+        raise ValueError("Required additional head must be positive for balancing-device sizing.")
+    if not (0.0 < discharge_coefficient <= 1.0):
+        raise ValueError("Discharge coefficient must be between 0 and 1.")
+
+    required_additional_pressure_drop_kpa = required_additional_head_m * density_kg_m3 * G / 1000.0
+    valve = size_control_valve(
+        flow_m3_h=branch_flow_m3_h,
+        differential_pressure_kpa=required_additional_pressure_drop_kpa,
+        density_kg_m3=density_kg_m3,
+    )
+
+    flow_m3_s = branch_flow_m3_h / 3600.0
+    required_dp_pa = required_additional_pressure_drop_kpa * 1000.0
+    velocity_term = math.sqrt(2.0 * required_dp_pa / density_kg_m3)
+    required_area_m2 = flow_m3_s / max(discharge_coefficient * velocity_term, 1.0e-12)
+    equivalent_orifice_diameter_m = math.sqrt(4.0 * required_area_m2 / math.pi)
+    branch_pipe_diameter_m = branch.pipe_id_mm / 1000.0
+    beta_ratio = equivalent_orifice_diameter_m / max(branch_pipe_diameter_m, 1.0e-12)
+
+    notes = [
+        "Equivalent balancing-valve size reuses the liquid Cv/Kv screening relationship already used on the control-valve page.",
+        f"Equivalent sharp-edge orifice assumes single-phase incompressible liquid flow with discharge coefficient Cd={discharge_coefficient:.2f}.",
+    ]
+    if beta_ratio > 0.80:
+        notes.append("Equivalent orifice is large relative to the branch ID; a thin-plate restriction may be weak or impractical, so a valve or purpose-built restriction spool may be better.")
+    elif beta_ratio < 0.15:
+        notes.append("Equivalent orifice is very small relative to the branch ID; plugging, wear, or fouling risk may be significant.")
+    if required_additional_pressure_drop_kpa > 100.0:
+        notes.append("Required extra throttling drop is substantial; check pump head margin, erosion/noise risk, and whether the entered split should instead be adjusted.")
+
+    return BranchBalancingDeviceResult(
+        branch_name=branch.name,
+        branch_flow_m3_h=branch_flow_m3_h,
+        required_additional_head_m=required_additional_head_m,
+        required_additional_pressure_drop_kpa=required_additional_pressure_drop_kpa,
+        required_kv=valve.required_kv,
+        required_cv=valve.required_cv,
+        equivalent_orifice_diameter_mm=equivalent_orifice_diameter_m * 1000.0,
+        equivalent_orifice_beta_ratio=beta_ratio,
+        discharge_coefficient=discharge_coefficient,
+        notes=notes,
+    )
+
+
 def _solve_branch_flow_for_head(
     branch: PipeSegment,
     target_head_m: float,
@@ -704,11 +774,14 @@ def analyze_parallel_branches(
         if total_fraction <= 0:
             raise ValueError("Total branch split fraction must be positive.")
         notes.append("Parallel-branch screen assumes the entered split fractions are the actual flow split.")
-        common_head_m = None
+        solved_entered_split: list[tuple[PipeSegment, float, HydraulicResult]] = []
         for branch, fraction in zip(branches, branch_split_fractions):
             branch_flow = total_flow_m3_h * fraction / total_fraction
             result = _calculate_branch_result(branch, branch_flow, density_kg_m3, viscosity_cp)
             head_values.append(result.total_dynamic_head_m)
+            solved_entered_split.append((branch, branch_flow, result))
+        common_head_m = max(head_values)
+        for branch, branch_flow, result in solved_entered_split:
             branch_results.append(
                 _build_parallel_branch_result(
                     branch=branch,
@@ -721,7 +794,7 @@ def analyze_parallel_branches(
     else:
         min_common_head_m = min(branch.elevation_change_m for branch in branches)
         low_head = min_common_head_m
-        high_head = max(max(branch.elevation_change_m for branch in branches) + 1.0, 1.0)
+        high_head = max(max(branch.elevation_change_m for branch in branches) + 100.0, 100.0)
 
         def total_flow_at_head(target_head_m: float) -> tuple[float, list[tuple[float, HydraulicResult]]]:
             solved: list[tuple[float, HydraulicResult]] = []
@@ -744,16 +817,14 @@ def analyze_parallel_branches(
         for _ in range(60):
             mid_head = 0.5 * (low_head + high_head)
             total_at_mid, solved_mid = total_flow_at_head(mid_head)
+            common_head_m = mid_head
+            solved_branches = solved_mid
             if abs(total_at_mid - total_flow_m3_h) < max(total_flow_m3_h, 1.0) * 1.0e-6:
-                common_head_m = mid_head
-                solved_branches = solved_mid
                 break
             if total_at_mid < total_flow_m3_h:
                 low_head = mid_head
             else:
                 high_head = mid_head
-                common_head_m = mid_head
-                solved_branches = solved_mid
 
         notes.append("Self-balancing mode solves for the common branch head where all open parallel branches see the same TDH and the solved branch flows add up to the entered total flow.")
         notes.append("Use this to estimate the natural flow split before adding manual throttling, control valves, or orifice plates.")
