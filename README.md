@@ -118,13 +118,15 @@ Default URL:
   - duty from steam flow
   - steam header pressure-change screening for same-duty steam demand, same-flow duty loss, and optional process-side ΔT checks
   - improved steam saturation / condensing temperature screening via piecewise Antoine water correlation
-- Evaporators
+|- Evaporators
   - feed/product/evaporation rate
   - boiling and condensing temperature screen
   - steam demand and steam economy
-  - design-calibrated U·A·ΔT capacity mode for existing evaporator bodies
+  - design-calibrated U·A·ΔT capacity mode for existing bodies
   - required area vs installed area screening with achievable evaporation/product concentration estimates
   - optional product-based BPE auto-fill for citric acid, fructose, dextrose, and sucrose liquors
+  - fouling and non-condensable gas (NCG) allowance screening for U-degradation and ΔT-penalty estimates
+  - multi-effect evaporator staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening
 - Crystallizers
   - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
   - crystal-volume-percent slurry basis for citric crystallizers

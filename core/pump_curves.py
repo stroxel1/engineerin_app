@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass
@@ -301,6 +302,281 @@ def screen_affinity_rerate(
         impeller_ratio=impeller_ratio,
         relative_power_factor=relative_power_factor,
         relative_npshr_factor=relative_npshr_factor,
+        notes=notes,
+    )
+
+
+# ────────────────── BEP (Best Efficiency Point) helpers ──────────────────
+
+
+@dataclass
+class BEPEstimate:
+    """Estimated best-efficiency point on a pump curve."""
+    flow_m3_h: float       # estimated BEP flow
+    head_m: float          # estimated BEP head
+    flow_fraction_of_max: float  # BEP flow as fraction of curve max flow
+    recommended_zone_lo: float   # lower bound of acceptable BEP band (fraction)
+    recommended_zone_hi: float   # upper bound of acceptable BEP band (fraction)
+    method: str            # how BEP was estimated
+    notes: list[str]
+
+
+@dataclass
+class BEPProximityResult:
+    """How close a measured operating point is to the pump's BEP."""
+    measured_flow_m3_h: float
+    measured_head_m: float
+    bep_flow_m3_h: float
+    bep_head_m: float
+    flow_offset_fraction: float     # (measured - BEP) / BEP flow
+    head_offset_fraction: float     # (measured - BEP) / BEP head
+    inside_preferred_zone: bool
+    proximity_status: str           # "at_bep", "within_preferred", "moderate_right", "moderate_left", "far_right", "far_left"
+    reliability_risk: str | None    # potential risk from operating off-BEP
+    notes: list[str]
+
+
+@dataclass
+class InstrumentBiasScreen:
+    """Quick screen for whether gauge/instrument error could explain a head-flow discrepancy."""
+    measured_flow_m3_h: float
+    measured_head_m: float
+    expected_flow_m3_h: float
+    expected_head_m: float
+    flow_discrepancy_m3_h: float
+    head_discrepancy_m: float
+    flow_bias_pct: float           # pct of reading that gauge error would need to explain gap
+    head_bias_pct: float
+    flow_explainable_with_2pct_gauge: bool
+    head_explainable_with_2pct_gauge: bool
+    flow_explainable_with_5pct_gauge: bool
+    head_explainable_with_5pct_gauge: bool
+    likely_explainable: bool
+    notes: list[str]
+
+
+def estimate_bep_from_curve(
+    curve: PumpCurveModel,
+    preferred_zone: tuple[float, float] = (0.70, 0.95),
+) -> BEPEstimate:
+    """Estimate the BEP from a pump curve using the maximum-head-slope heuristic.
+
+    Centrifugal-pump BEP typically sits in the 70-95% flow range on the curve.
+    This method picks the point in that zone with the lowest head (closest to
+    the curve's run-out end) — a practical screening approximation when vendor
+    BEP data is unavailable.
+
+    A better heuristic is to find the flow at which the head curve crosses 85%
+    of shut-off head, since many centrifugals peak efficiency near there.
+    """
+    if len(curve.points) < 2:
+        raise ValueError("Need at least two curve points to estimate BEP.")
+
+    shut_off_head = curve.points[0].head_m
+    max_flow = curve.points[-1].flow_m3_h
+    min_flow = curve.points[0].flow_m3_h
+    flow_range = max_flow - min_flow
+
+    # Default: BEP is near the point whose head is ~85% of shutoff head
+    target_head = 0.85 * shut_off_head
+
+    # Find the curve segment bracketing the target head
+    best_point: PumpCurvePoint | None = None
+    best_distance = float("inf")
+
+    for i, pt in enumerate(curve.points):
+        # Prefer points in the preferred zone
+        flow_frac = (pt.flow_m3_h - min_flow) / max(flow_range, 1e-12)
+        in_zone = preferred_zone[0] <= flow_frac <= preferred_zone[1]
+
+        head_dist = abs(pt.head_m - target_head)
+
+        # Points outside the zone get a penalty factor of 3x
+        if not in_zone:
+            head_dist *= 3.0
+
+        if head_dist < best_distance:
+            best_distance = head_dist
+            best_point = pt
+
+    if best_point is None:
+        # Fallback: just take the midpoint of the curve
+        mid_idx = len(curve.points) // 2
+        best_point = curve.points[mid_idx]
+
+    bep_flow_frac = (best_point.flow_m3_h - min_flow) / max(flow_range, 1e-12)
+
+    notes = [
+        f"BEP estimated from curve shape using 85% shut-off-head heuristic ({shut_off_head:.1f} m shutoff → {target_head:.1f} m target).",
+        f"Estimated BEP: {best_point.flow_m3_h:.1f} m3/h @ {best_point.head_m:.1f} m — {bep_flow_frac:.0%} of curve flow range.",
+        "Vendor data, efficiency curves, or affinity-test results should replace this screening estimate for design or reliability decisions.",
+    ]
+
+    lo_frac, hi_frac = preferred_zone
+
+    return BEPEstimate(
+        flow_m3_h=best_point.flow_m3_h,
+        head_m=best_point.head_m,
+        flow_fraction_of_max=bep_flow_frac,
+        recommended_zone_lo=lo_frac,
+        recommended_zone_hi=hi_frac,
+        method="85pct_shutoff_head_heuristic",
+        notes=notes,
+    )
+
+
+def assess_bep_proximity(
+    curve: PumpCurveModel,
+    measured_flow_m3_h: float,
+    measured_head_m: float,
+    preferred_zone: tuple[float, float] | None = None,
+    bep_estimate: BEPEstimate | None = None,
+) -> BEPProximityResult:
+    """Assess how close the measured operating point is to BEP."""
+    if bep_estimate is None:
+        bep_estimate = estimate_bep_from_curve(curve, preferred_zone=preferred_zone or (0.70, 0.95))
+
+    bep_flow = bep_estimate.flow_m3_h
+    bep_head = bep_estimate.head_m
+    lo_frac = bep_estimate.recommended_zone_lo
+    hi_frac = bep_estimate.recommended_zone_hi
+
+    min_flow = curve.points[0].flow_m3_h
+    max_flow = curve.points[-1].flow_m3_h
+    flow_range = max_flow - min_flow
+    lo_flow = min_flow + lo_frac * flow_range
+    hi_flow = min_flow + hi_frac * flow_range
+
+    # Offset from BEP
+    flow_offset = (measured_flow_m3_h - bep_flow) / max(bep_flow, 1e-12)
+    head_offset = (measured_head_m - bep_head) / max(bep_head, 1e-12)
+
+    inside_zone = lo_flow <= measured_flow_m3_h <= hi_flow
+
+    # Classify proximity
+    if inside_zone:
+        if abs(flow_offset) < 0.05:
+            proximity = "at_bep"
+        else:
+            proximity = "within_preferred"
+
+        reliability_risk = None
+    else:
+        if measured_flow_m3_h > hi_flow:
+            frac_above = (measured_flow_m3_h - hi_flow) / max(flow_range, 1e-12)
+            if frac_above < 0.15:
+                proximity = "moderate_right"
+                reliability_risk = "Moderately right of BEP — watch for increased NPSHr, possible cavitation, and rising bearing load."
+            else:
+                proximity = "far_right"
+                reliability_risk = "Far right of BEP — high risk of cavitation, excessive radial thrust, premature seal/bearing failure, and possible motor overload."
+        else:
+            frac_below = (lo_flow - measured_flow_m3_h) / max(flow_range, 1e-12)
+            if frac_below < 0.15:
+                proximity = "moderate_left"
+                reliability_risk = "Moderately left of BEP — watch for recirculation, internal heating on prolonged operation, and possible vibration."
+            else:
+                proximity = "far_left"
+                reliability_risk = "Far left of BEP — high risk of suction/discharge recirculation, temperature rise, vibration, and mechanical-seal damage on sustained operation."
+
+    notes = [
+        f"Estimated BEP from curve: {bep_flow:.1f} m3/h @ {bep_head:.1f} m (screening estimate; replace with vendor BEP if available).",
+        f"Measured operating point: {measured_flow_m3_h:.1f} m3/h @ {measured_head_m:.1f} m.",
+        f"Flow offset from BEP: {flow_offset:+.1%}  |  Head offset from BEP: {head_offset:+.1%}.",
+    ]
+
+    # Add preferred zone info
+    notes.append(
+        f"Preferred operating band: {lo_flow:.1f} – {hi_flow:.1f} m3/h ({lo_frac:.0%}–{hi_frac:.0%} of curve range)."
+    )
+
+    if proximity in ("at_bep",):
+        notes.append("Operating at BEP — ideal for reliability, energy efficiency, and seal/bearing life.")
+    elif proximity == "within_preferred":
+        if flow_offset > 0:
+            notes.append("Within preferred band but slightly right of BEP — monitor NPSH margin if flow drifts higher.")
+        else:
+            notes.append("Within preferred band but slightly left of BEP — acceptable for most services.")
+    elif reliability_risk:
+        notes.append(reliability_risk)
+
+    notes.extend(bep_estimate.notes)
+
+    return BEPProximityResult(
+        measured_flow_m3_h=measured_flow_m3_h,
+        measured_head_m=measured_head_m,
+        bep_flow_m3_h=bep_flow,
+        bep_head_m=bep_head,
+        flow_offset_fraction=flow_offset,
+        head_offset_fraction=head_offset,
+        inside_preferred_zone=inside_zone,
+        proximity_status=proximity,
+        reliability_risk=reliability_risk,
+        notes=notes,
+    )
+
+
+def screen_instrument_bias(
+    measured_flow_m3_h: float,
+    measured_head_m: float,
+    expected_flow_m3_h: float,
+    expected_head_m: float,
+    flow_gauge_accuracy_pct: float = 2.0,
+    pressure_gauge_accuracy_pct: float = 2.0,
+) -> InstrumentBiasScreen:
+    """Check whether instrument gauge accuracy could explain a deviation between measured and expected values."""
+    flow_disc = measured_flow_m3_h - expected_flow_m3_h
+    head_disc = measured_head_m - expected_head_m
+
+    flow_bias_pct = abs(flow_disc) / max(abs(measured_flow_m3_h), 1e-12) * 100.0
+    head_bias_pct = abs(head_disc) / max(abs(measured_head_m), 1e-12) * 100.0
+
+    flow_ok_2 = flow_bias_pct <= flow_gauge_accuracy_pct
+    head_ok_2 = head_bias_pct <= pressure_gauge_accuracy_pct
+    flow_ok_5 = flow_bias_pct <= 5.0
+    head_ok_5 = head_bias_pct <= 5.0
+
+    likely = flow_ok_2 or head_ok_2 or flow_ok_5 or head_ok_5
+
+    notes = [
+        f"Discrepancy: flow = {flow_disc:+.2f} m3/h ({flow_bias_pct:.1f}% of measured), "
+        f"head = {head_disc:+.2f} m ({head_bias_pct:.1f}% of measured).",
+        f"If the flow gauge is rated ±{flow_gauge_accuracy_pct}% of reading, "
+        f"the {'entire flow discrepancy fits within gauge error.' if flow_ok_2 else f'flow discrepancy exceeds gauge error (±{flow_gauge_accuracy_pct}%).'}",
+        f"If the pressure gauges are rated ±{pressure_gauge_accuracy_pct}% of reading, "
+        f"the {'entire head discrepancy fits within gauge error.' if head_ok_2 else f'head discrepancy exceeds gauge error (±{pressure_gauge_accuracy_pct}%).'}",
+    ]
+
+    if not flow_ok_2 and not flow_ok_5:
+        notes.append(
+            f"Flow discrepancy ({flow_bias_pct:.1f}%) exceeds even a ±5% gauge band, suggesting a real process deviation "
+            f"or systematic calibration drift rather than normal measurement scatter."
+        )
+    if not head_ok_2 and not head_ok_5:
+        notes.append(
+            f"Head discrepancy ({head_bias_pct:.1f}%) exceeds both ±2% and ±5% gauge bands. "
+            f"Verify tap blockages, gauge zero, and elevation corrections before concluding pump performance loss."
+        )
+    if likely and (flow_ok_2 or head_ok_2):
+        notes.append(
+            "At least one discrepancy fits within standard instrument accuracy; "
+            "the deviation may be attributable to normal measurement uncertainty rather than true pump degradation."
+        )
+
+    return InstrumentBiasScreen(
+        measured_flow_m3_h=measured_flow_m3_h,
+        measured_head_m=measured_head_m,
+        expected_flow_m3_h=expected_flow_m3_h,
+        expected_head_m=expected_head_m,
+        flow_discrepancy_m3_h=flow_disc,
+        head_discrepancy_m=head_disc,
+        flow_bias_pct=flow_bias_pct,
+        head_bias_pct=head_bias_pct,
+        flow_explainable_with_2pct_gauge=flow_ok_2,
+        head_explainable_with_2pct_gauge=head_ok_2,
+        flow_explainable_with_5pct_gauge=flow_ok_5,
+        head_explainable_with_5pct_gauge=head_ok_5,
+        likely_explainable=likely,
         notes=notes,
     )
 

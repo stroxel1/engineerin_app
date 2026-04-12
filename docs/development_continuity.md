@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-12 03:17 CDT
+Last updated: 2026-04-12 09:10 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -51,6 +51,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - built-in and uploaded pump-curve matching against system curves
    - pump rerate / affinity screening from speed or impeller changes with relative power and NPSHr factors
    - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening
+   - pump field baseline comparison and curve diagnosis workflow
 10. Hydraulics runtime bugs fixed:
    - local pandas shadowing bug on hydraulics page
    - missing `volumetric_flow_to_m3_h` import
@@ -62,7 +63,18 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - side-by-side operating-point comparison across imported models
    - workbook-preview auto-normalization for vendor-style curve tables
    - family / motive-basis filtering for imported curve libraries
-12. Crystallizers expanded with:
+12. Pump hydraulics BEP proximity & instrument bias added:
+    - BEP estimation from curve using 85% shutoff head heuristic
+    - BEP proximity assessment with flow/head offsets, preferred zone check, reliability risk flags
+    - Instrument bias screen: whether standard gauge accuracy (2%-5%) could explain flow/head deviations
+    - UI under Hydraulics > Pump & NPSHa with checkbox toggle, built-in/manual curve entry
+13. Evaporator fouling/NCG allowance screening added:
+    - Fouling degradation via series-resistance model (clean vs dirty U)
+    - NCG partial-pressure dilution lowering effective condensing temperature
+    - Combined capacity penalty with U-degradation and delta-T penalty breakdown
+    - Engineering notes when degradation exceeds 25% and 50% thresholds
+    - UI under Steam > Evaporator
+14. Crystallizers expanded with:
    - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
    - crystal-volume-percent slurry basis for citric crystallizers
    - supersaturation / metastable-band screening from feed solids versus equilibrium mother-liquor solids
@@ -107,24 +119,21 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - Prefer practical plant calculators before design-grade rigor
 
 ## Current active work focus
-1. Steam jets
-   - extend workbook auto-normalization with vendor-specific sheet presets, larger preview windows if needed, and richer basis metadata display/export
-   - preserve clear warnings that these are screening curves until confirmed against vendor performance data
-2. Evaporators / solution properties
-   - refine calibrated evaporator mode with fouling / non-condensable allowances or body-by-body staging
-3. Hydraulics refinement
-   - next hydraulics increment should add BEP proximity and instrument-bias screening on top of the new current-vs-baseline / measured-vs-curve workflow
-   - keep emphasis on practical plant line studies rather than academic hydraulics detail
+1. Evaporators
+   - fouling/NCG allowance screening landed
+   - next: body-by-body staging or workbook-derived calibration inputs
+2. Steam jets
+   - extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata
+3. Citric crystallizer
+   - multi-body capacity screening with feed/withdrawal balance
+4. Solution BPE
+   - refine >60 DS citric estimation
 
 ## Next high-value work items
-1. Steam jets
-   - add vendor-specific workbook presets / mapping aids on top of the new preview normalizer
-2. Evaporators
-   - refine calibrated mode with fouling / non-condensable allowances or body-by-body staging
-3. Hydraulics
-   - add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow
-4. Solution BPE
-   - refine >60 DS citric estimation with stronger literature-backed correlation or clearly segmented screening bands
+1. Evaporators: body-by-body staging or workbook-derived calibration inputs
+2. Steam jets: vendor-specific workbook presets / mapping aids on top of the preview normalizer
+3. Citric crystallizer: multi-body crystallizer capacity screening with explicit feed/withdrawal balance
+4. Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation
 
 ## Known cautions
 - The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:

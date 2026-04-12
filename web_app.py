@@ -26,8 +26,11 @@ from engineering_app.core.curves import (
 from engineering_app.core.evaporators import (
     EvaporatorDesignCalibrationInputs,
     EvaporatorInputs,
+    FoulingAllowanceInputs,
     estimate_design_calibrated_evaporation,
     estimate_evaporation,
+    estimate_multi_effect_evaporation,
+    evaluate_fouling_and_ncg_allowance,
 )
 from engineering_app.core.hydraulics import (
     PipeSegment,
@@ -52,11 +55,14 @@ from engineering_app.core.hydraulics import (
 from engineering_app.core.pipe_data import COMMON_FITTINGS, SCHEDULE_10S_STAINLESS
 from engineering_app.core.pump_curves import (
     available_builtin_curve_options,
+    assess_bep_proximity,
     build_curve_from_xy_rows as build_pump_curve_from_xy_rows,
     compare_measured_point_to_curve,
+    estimate_bep_from_curve,
     find_curve_system_intersection,
     get_builtin_curve,
     screen_affinity_rerate,
+    screen_instrument_bias,
 )
 from engineering_app.core.quicktools import (
     brix_reconciliation,
@@ -122,6 +128,10 @@ def _show_notes(notes: list[str]) -> None:
     for note in notes:
         st.caption(f"- {note}")
 
+
+def _title_case_status(status: str) -> str:
+    """Convert underscore-separated status to title case for display."""
+    return status.replace("_", " ").title()
 
 
 def _remember_case(page: str, inputs: dict, result: dict) -> None:
@@ -192,14 +202,16 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
-            ("active", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+            ("active", "Evaporators: refine multi-effect staging with workbook-derived U calibration and cross-flow/backward-feed modes"),
+            ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
+            ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
             ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
-            ("todo", "Hydraulics: add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow"),
         ])
     with right:
         st.subheader("Recently completed")
         _render_status_lines([
+            ("done", "Evaporators: multi-effect staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening"),
+            ("done", "Evaporators: add fouling and NCG allowance screening for U-degradation and ΔT-penalty"),
             ("done", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
             ("done", "Steam jets: workbook preview auto-normalization plus family / motive-basis filtering for imported curve libraries"),
             ("done", "Solution BPE for citric, fructose, dextrose, and sucrose"),
@@ -734,8 +746,8 @@ def render_quick_tools() -> None:
         except ValueError as exc:
             st.error(str(exc))
 
-    with tabs[9]:
-        st.caption("Estimate direct steam and motor/electric operating cost, then compare current vs proposed cases so troubleshooters can rank leaks, rerates, throttling losses, and optimization opportunities.")
+    with tabs[10]:
+        st.caption("Estimate direct steam and utility cost, then compare current vs proposed cases so troubleshooters can rank leaks, rerates, throttling losses, and optimization opportunities.")
         utility_tabs = st.tabs(["Steam", "Electricity"])
         steam_cost_basis_options = ["$/kg", "$/1000 kg", "$/lb", "$/1000 lb", "$/metric ton"]
         motor_power_units = ["kW", "hp"]
@@ -1435,6 +1447,201 @@ def render_hydraulics() -> None:
         else:
             with st.expander("Current field-check JSON"):
                 st.json(asdict(field_check))
+
+        # ── BEP Proximity & Instrument Bias ────────────────────────────
+        st.divider()
+        st.subheader("BEP proximity & instrument-bias screen")
+        st.caption("Estimate how close the current operating point sits to the pump's best-efficiency point and whether standard gauge accuracy could explain any flow/head deviation from expected values.")
+
+        bep_enabled = st.checkbox("Enable BEP proximity assessment", value=True, key="hyd_bep_enabled")
+        if bep_enabled:
+            bep_curve_source = st.radio(
+                "Curve for BEP estimate",
+                ["Built-in library", "Manual table"],
+                horizontal=True,
+                key="hyd_bep_curve_source",
+            )
+            bep_curve_used = None
+            if bep_curve_source == "Built-in library":
+                bep_curve_key = st.selectbox(
+                    "BEP curve",
+                    available_builtin_curve_options(),
+                    format_func=lambda key: get_builtin_curve(key).name,
+                    key="hyd_bep_builtin",
+                )
+                bep_curve_used = get_builtin_curve(bep_curve_key)
+            else:
+                st.caption("Enter enough flow/head points to estimate a BEP (2 minimum).")
+                bep_table = pd.DataFrame([
+                    { "flow_m3_h": 0.0, "head_m": max(field_check.developed_head_m * 1.3, 15.0)},
+                    { "flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 0.5, 5.0), "head_m": max(field_check.developed_head_m * 1.15, 10.0)},
+                    { "flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit), 10.0), "head_m": max(field_check.developed_head_m * 1.0, 5.0)},
+                    { "flow_m3_h": max(volumetric_flow_to_m3_h(flow_value, flow_unit) * 1.4, 15.0), "head_m": max(field_check.developed_head_m * 0.65, 2.0)},
+                ])
+                edited_bep_table = st.data_editor(bep_table, num_rows="dynamic", use_container_width=True, key="hyd_bep_manual_table")
+                bep_curve_name = st.text_input("BEP curve name", value="BEP reference curve", key="hyd_bep_manual_name")
+                bep_curve_family = st.text_input("BEP curve family", value="BEP screening", key="hyd_bep_manual_family")
+                try:
+                    bep_curve_used = build_pump_curve_from_xy_rows(
+                        bep_curve_name, edited_bep_table.to_dict(orient="records"), "flow_m3_h", "head_m", family=bep_curve_family,
+                    )
+                except Exception:
+                    st.warning("Manual BEP curve needs at least two valid points for estimation.")
+
+            if bep_curve_used is not None:
+                cur_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
+                cur_head_m = field_check.developed_head_m
+
+                # Preferred zone controls
+                bz1, bz2 = st.columns(2)
+                pref_zone_lo = bz1.slider("Preferred zone lower bound (fraction of curve range)", min_value=0.4, max_value=0.9, value=0.70, step=0.05, key="hyd_bep_zone_lo")
+                pref_zone_hi = bz2.slider("Preferred zone upper bound (fraction of curve range)", min_value=0.6, max_value=1.0, value=0.95, step=0.05, key="hyd_bep_zone_hi")
+                if pref_zone_lo >= pref_zone_hi:
+                    pref_zone_hi = pref_zone_lo + 0.05
+
+                bep_est = estimate_bep_from_curve(bep_curve_used, preferred_zone=(pref_zone_lo, pref_zone_hi))
+                bep_result = assess_bep_proximity(
+                    bep_curve_used,
+                    measured_flow_m3_h=cur_flow_m3_h,
+                    measured_head_m=cur_head_m,
+                    preferred_zone=(pref_zone_lo, pref_zone_hi),
+                    bep_estimate=bep_est,
+                )
+
+                bp1, bp2, bp3, bp4 = st.columns(4)
+                bp1.metric("Estimated BEP flow", f"{bep_result.bep_flow_m3_h:,.1f} m3/h", help=f"~{bep_est.flow_fraction_of_max:.0%} of curve range")
+                bp2.metric("Estimated BEP head", f"{bep_result.bep_head_m:,.1f} m")
+                bp3.metric(
+                    "BEP proximity status",
+                    _title_case_status(bep_result.proximity_status),
+                    delta=f"Flow offset {bep_result.flow_offset_fraction:+.1%}"
+                )
+                bp4.metric(
+                    "Inside preferred zone",
+                    "Yes" if bep_result.inside_preferred_zone else "No",
+                )
+
+                if bep_result.reliability_risk:
+                    st.warning(bep_result.reliability_risk)
+
+                b_fig = go.Figure()
+                b_fig.add_trace(go.Scatter(
+                    x=[pt.flow_m3_h for pt in bep_curve_used.points],
+                    y=[pt.head_m for pt in bep_curve_used.points],
+                    mode="lines+markers",
+                    name=bep_curve_used.name,
+                    line=dict(dash="solid"),
+                ))
+                # Mark BEP point
+                b_fig.add_trace(go.Scatter(
+                    x=[bep_result.bep_flow_m3_h],
+                    y=[bep_result.bep_head_m],
+                    mode="markers",
+                    marker=dict(size=14, symbol="star", color="green"),
+                    name=f"Estimated BEP ({bep_result.bep_flow_m3_h:.1f} m3/h, {bep_result.bep_head_m:.1f} m)",
+                ))
+                # Mark measured current point
+                b_fig.add_trace(go.Scatter(
+                    x=[cur_flow_m3_h],
+                    y=[cur_head_m],
+                    mode="markers",
+                    marker=dict(size=12, symbol="circle", color="red"),
+                    name=f"Current measured ({cur_flow_m3_h:.1f} m3/h, {cur_head_m:.1f} m)",
+                ))
+                # Mark preferred zone band
+                flow_range = bep_curve_used.points[-1].flow_m3_h - bep_curve_used.points[0].flow_m3_h
+                lo_f = bep_curve_used.points[0].flow_m3_h + pref_zone_lo * flow_range
+                hi_f = bep_curve_used.points[0].flow_m3_h + pref_zone_hi * flow_range
+                b_fig.add_vrect(
+                    x0=lo_f, x1=hi_f,
+                    fillcolor="green", opacity=0.08,
+                    line_width=0,
+                    annotation_text=f"Preferred zone ({pref_zone_lo:.0%}–{pref_zone_hi:.0%})",
+                    annotation_position="top",
+                )
+                # Mark baseline if available
+                if baseline_enabled and "baseline_curve_diag" in dir() and baseline_curve_diag is not None:
+                    bl_flow = volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit)
+                    b_fig.add_trace(go.Scatter(
+                        x=[bl_flow],
+                        y=[baseline_check.developed_head_m],
+                        mode="markers",
+                        marker=dict(size=12, symbol="diamond", color="blue"),
+                        name=f"Baseline ({bl_flow:.1f} m3/h, {baseline_check.developed_head_m:.1f} m)",
+                    ))
+                b_fig.update_layout(
+                    title=f"BEP proximity on {bep_curve_used.name}",
+                    xaxis_title="Flow (m3/h)",
+                    yaxis_title="Head (m)",
+                )
+                st.plotly_chart(b_fig, use_container_width=True)
+                _show_notes(bep_result.notes)
+
+        instrument_enabled = st.checkbox("Enable instrument-bias screen", value=True, key="hyd_instr_bias_enabled")
+        if instrument_enabled:
+            expected_flow_displaying = field_check.expected_system_head_m if field_check.expected_system_head_m is not None else field_check.developed_head_m
+            ib1, ib2, ib3, ib4 = st.columns(4)
+            ib_flow_expected_value = ib1.number_input(
+                "Expected/reference flow",
+                min_value=0.0,
+                value=flow_value,
+                key="hyd_instr_exp_flow",
+            )
+            ib_flow_expected_unit = ib2.selectbox(
+                "Expected flow unit",
+                VOLUMETRIC_FLOW_UNITS,
+                index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0,
+                key="hyd_instr_exp_flow_unit",
+            )
+            ib_head_expected_value = ib3.number_input(
+                "Expected/reference head (m)",
+                min_value=0.0,
+                value=field_check.developed_head_m,
+                key="hyd_instr_exp_head",
+            )
+            ib_gauge_accuracy = ib4.selectbox(
+                "Gauge accuracy assumption",
+                ["2%", "3%", "5%"],
+                index=0,
+                key="hyd_instr_gauge_acc",
+            )
+            gauge_acc_num = float(ib_gauge_accuracy.rstrip("%"))
+
+            ib_bias = screen_instrument_bias(
+                measured_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
+                measured_head_m=field_check.developed_head_m,
+                expected_flow_m3_h=volumetric_flow_to_m3_h(ib_flow_expected_value, ib_flow_expected_unit),
+                expected_head_m=ib_head_expected_value,
+                flow_gauge_accuracy_pct=gauge_acc_num,
+                pressure_gauge_accuracy_pct=gauge_acc_num,
+            )
+
+            bias1, bias2, bias3, bias4 = st.columns(4)
+            bias1.metric(
+                "Flow discrepancy",
+                f"{ib_bias.flow_discrepancy_m3_h:+.2f} m3/h",
+                delta=f"{ib_bias.flow_bias_pct:.1f}% of reading",
+            )
+            bias2.metric(
+                "Head discrepancy",
+                f"{ib_bias.head_discrepancy_m:+.2f} m",
+                delta=f"{ib_bias.head_bias_pct:.1f}% of reading",
+            )
+            bias3.metric(
+                "Flow explainable by gauge error",
+                f"{ib_gauge_accuracy}" if ib_bias.flow_explainable_with_2pct_gauge or (gauge_acc_num == 5 and ib_bias.flow_explainable_with_5pct_gauge) else f"No — exceeds {ib_gauge_accuracy}",
+            )
+            bias4.metric(
+                "Head explainable by gauge error",
+                f"{ib_gauge_accuracy}" if ib_bias.head_explainable_with_2pct_gauge or (gauge_acc_num == 5 and ib_bias.head_explainable_with_5pct_gauge) else f"No — exceeds {ib_gauge_accuracy}",
+            )
+
+            if ib_bias.likely_explainable:
+                st.info("This deviation may be attributable to normal instrument measurement uncertainty rather than actual pump degradation or system change.")
+            else:
+                st.warning("Discrepancy exceeds the assumed gauge accuracy band on both flow and head — investigate process changes, calibration drift, or true pump performance loss before attributing readings to normal scatter.")
+
+            _show_notes(ib_bias.notes)
 
     with tabs[3]:
         st.caption("Enter up to three sequential piping sections to estimate total system TDH and pressure drop.")
@@ -2369,7 +2576,7 @@ def render_evaporators() -> None:
         bpe_c = auto_props.estimated_bpe_c
         st.caption(f"Auto-estimated BPE for {PRODUCT_PROFILES[evaporator_product].display_name}: {_display_delta_t(bpe_c, bpe_unit):,.2f} °{bpe_unit}")
 
-    tabs = st.tabs(["Target duty", "Design-calibrated mode"])
+    tabs = st.tabs(["Target duty", "Design-calibrated mode", "Fouling & NCG", "Multi-effect staging"])
 
     with tabs[0]:
         result = estimate_evaporation(
@@ -2488,6 +2695,231 @@ def render_evaporators() -> None:
             "installed_area_m2": installed_area,
             "availability_pct": availability_pct,
         }, asdict(calibrated))
+
+    with tabs[2]:
+        st.caption("Estimate how fouling resistances and non-condensable gases degrade an evaporator's effective U and driving ΔT. Enter clean U and fouling factors typical for your service; treat outputs as screening-level allowances, not design margins.")
+        f0, f1, f2 = st.columns(3)
+        clean_u_val = f0.number_input("Clean overall U (W/m²·K)", min_value=100.0, value=2000.0, key="ev_fouling_clean_u")
+        tube_fouling = f1.number_input("Tube-side (liquor) fouling resistance (m²·K/W)", min_value=0.0, value=0.00035, format="%.5f", key="ev_fouling_tube")
+        steam_fouling = f2.number_input("Steam-side fouling resistance (m²·K/W)", min_value=0.0, value=0.00010, format="%.5f", key="ev_fouling_steam")
+
+        f3, f4, f5, f6 = st.columns(4)
+        ncg_fraction = f3.number_input("NCG mole fraction in steam space", min_value=0.0, max_value=0.15, value=0.02, step=0.005, key="ev_fouling_ncg")
+        fouling_steam_pressure = f4.number_input(
+            "Steam supply pressure", value=steam_pressure, key="ev_fouling_steam_pressure",
+        )
+        fouling_steam_pressure_unit = f5.selectbox("Steam pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index(steam_pressure_unit) if steam_pressure_unit in PRESSURE_UNITS else 4, key="ev_fouling_steam_pressure_unit")
+        fouling_operating_pressure = f6.number_input(
+            "Vapor body operating pressure", value=operating_pressure, key="ev_fouling_operating_pressure",
+        )
+        f7, f8 = st.columns(2)
+        fouling_operating_pressure_unit = f7.selectbox("Operating pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index(operating_pressure_unit) if operating_pressure_unit in PRESSURE_UNITS else 0, key="ev_fouling_operating_pressure_unit")
+        fouling_bpe = f8.number_input("BPE (°C)", value=bpe_c if bpe_unit == "C" else bpe_c, key="ev_fouling_bpe_c")
+
+        fouling_inputs = FoulingAllowanceInputs(
+            clean_u_w_m2_k=clean_u_val,
+            tube_side_fouling_m2_k_w=tube_fouling,
+            steam_side_fouling_m2_k_w=steam_fouling,
+            ncg_mole_fraction=ncg_fraction,
+            steam_pressure_value=fouling_steam_pressure,
+            steam_pressure_unit=fouling_steam_pressure_unit,
+            operating_pressure_value=fouling_operating_pressure,
+            operating_pressure_unit=fouling_operating_pressure_unit,
+            bpe_c=fouling_bpe,
+        )
+        fouling_result = evaluate_fouling_and_ncg_allowance(fouling_inputs)
+
+        u1, u2, u3, u4 = st.columns(4)
+        u1.metric("Clean U", f"{fouling_result.clean_u_w_m2_k:,.0f} W/m²·K")
+        u2.metric("Fouled U", f"{fouling_result.dirty_u_w_m2_k:,.0f} W/m²·K", delta=f"{fouling_result.u_degradation_pct:.1f}% degradation")
+        u3.metric("Clean condensing temp", f"{_display_temperature(fouling_result.clean_condensing_temp_c, temp_out_unit):,.1f} °{temp_out_unit}")
+        u4.metric("Effective condensing (w/ NCG)", f"{_display_temperature(fouling_result.effective_condensing_temp_c, temp_out_unit):,.1f} °{temp_out_unit}")
+
+        v1, v2, v3, v4 = st.columns(4)
+        v1.metric("Condensing temp penalty", f"C{fouling_result.condensing_temp_penalty_c:+.2f} °C")
+        v2.metric("Clean ΔT", f"{_display_delta_t(fouling_result.clean_delta_t_c, dt_out_unit):,.2f} °{dt_out_unit}")
+        v3.metric("Fouled ΔT", f"{_display_delta_t(fouling_result.dirty_delta_t_c, dt_out_unit):,.2f} °{dt_out_unit}")
+        v4.metric("ΔT penalty", f"C{fouling_result.delta_t_penalty_c:+.2f} °C")
+
+        w1, w2, w3 = st.columns(3)
+        w1.metric(
+            "Clean duty (per m²)", f"{fouling_result.clean_capacity_kw:,.2f} kW/m²",
+        )
+        w2.metric(
+            "Fouled duty (per m²)", f"{fouling_result.dirty_capacity_kw:,.2f} kW/m²",
+            delta=f"{fouling_result.capacity_penalty_pct:.1f}% loss",
+        )
+        w3.metric(
+            "Combined allowance factor", f"{fouling_result.combined_allowance:.3f}x",
+            help=f"Dirty case is {fouling_result.combined_allowance:.3f} × the clean U·ΔT capacity",
+        )
+
+        if installed_area > 0:
+            x1, x2, x3 = st.columns(3)
+            x1.metric("Total clean capacity", f"{fouling_result.clean_capacity_kw * installed_area:,.1f} kW")
+            x2.metric("Total fouled capacity", f"{fouling_result.dirty_capacity_kw * installed_area:,.1f} kW")
+            total_loss = (fouling_result.clean_capacity_kw - fouling_result.dirty_capacity_kw) * installed_area
+            x3.metric("Total capacity loss", f"{total_loss:,.1f} kW", delta=f"{fouling_result.capacity_penalty_pct:.1f}%")
+
+        _show_notes(fouling_result.notes)
+        _remember_case(
+            "evaporators-fouling-ncg",
+            {
+                "clean_u_w_m2_k": clean_u_val,
+                "tube_fouling": tube_fouling,
+                "steam_fouling": steam_fouling,
+                "ncg_fraction": ncg_fraction,
+                "steam_pressure_value": fouling_steam_pressure,
+                "steam_pressure_unit": fouling_steam_pressure_unit,
+                "operating_pressure_value": fouling_operating_pressure,
+                "operating_pressure_unit": fouling_operating_pressure_unit,
+                "bpe_c": fouling_bpe,
+            },
+            {k: v for k, v in asdict(fouling_result).items() if k != "notes"},
+        )
+
+    with tabs[3]:
+        st.caption("Screen a multi-effect evaporator train by distributing available ΔT across effects, estimating per-effect BPE, and computing forward-feed temperature/pressure profiles and overall steam economy.")
+
+        d1, d2, d3 = st.columns(3)
+        me_n_effects = d1.number_input("Number of effects", min_value=1, max_value=6, value=3, step=1, key="ev_me_n_effects")
+        me_feed_rate = d2.number_input("Feed rate", value=25000.0, key="ev_me_feed_rate")
+        me_feed_rate_unit = d3.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="ev_me_feed_rate_unit")
+
+        d4, d5 = st.columns(2)
+        me_feed_solids = d4.number_input("Feed solids (wt%)", value=12.0, key="ev_me_feed_solids")
+        me_product_solids = d5.number_input("Product solids (wt%)", value=50.0, key="ev_me_product_solids")
+
+        e1, e2, e3, e4 = st.columns(4)
+        me_steam_pressure = e1.number_input("Steam pressure", value=3.5, key="ev_me_steam_pressure")
+        me_steam_pressure_unit = e2.selectbox("Steam pressure unit", PRESSURE_UNITS, index=4, key="ev_me_steam_pressure_unit")
+        me_last_effect_pressure = e3.number_input("Last-effect pressure", value=12.0, key="ev_me_last_pressure")
+        me_last_effect_pressure_unit = e4.selectbox("Last-effect pressure unit", PRESSURE_UNITS, index=0, key="ev_me_last_pressure_unit")
+
+        e5, e6 = st.columns(2)
+        me_duty_per_kg = e5.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_me_spec_duty")
+        me_temp_out_unit = e6.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_me_temp_out")
+
+        st.markdown("**Per-effect BPE (°C)**")
+        st.caption("Enter BPE for each effect based on the expected liquor concentration at that effect. The app will pad with the last entered value if fewer than the number of effects is provided.")
+        bpe_cols = st.columns(min(me_n_effects, 6))
+        me_bpe_list = []
+        for i in range(me_n_effects):
+            bpe_val = bpe_cols[i].number_input(
+                f"Effect {i+1} BPE",
+                value=6.0 + i * 3.0,
+                min_value=0.0,
+                key=f"ev_me_bpe_{i}",
+            )
+            me_bpe_list.append(bpe_val)
+
+        try:
+            me_result = estimate_multi_effect_evaporation(
+                feed_rate_kg_h=me_feed_rate if me_feed_rate_unit == "kg/h" else mass_flow_to_kg_h(me_feed_rate, me_feed_rate_unit),
+                feed_solids_wt_pct=me_feed_solids,
+                product_solids_wt_pct=me_product_solids,
+                n_effects=me_n_effects,
+                steam_pressure_value=me_steam_pressure,
+                steam_pressure_unit=me_steam_pressure_unit,
+                last_effect_pressure_value=me_last_effect_pressure,
+                last_effect_pressure_unit=me_last_effect_pressure_unit,
+                bpe_c_per_effect=me_bpe_list,
+                estimated_specific_evaporation_duty_kj_kg=me_duty_per_kg,
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Number of effects", str(me_result.n_effects))
+            m2.metric("Total evaporation", f"{kg_h_to_mass_flow(me_result.total_evaporation_kg_h, me_feed_rate_unit):,.1f} {me_feed_rate_unit}")
+            m3.metric("Steam required", f"{kg_h_to_mass_flow(me_result.steam_flow_kg_h, me_feed_rate_unit):,.1f} {me_feed_rate_unit}")
+            m4.metric("Steam economy", f"{me_result.overall_steam_economy:.2f} kg/kg")
+
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Steam temperature", f"{_display_temperature(me_result.steam_temperature_c, me_temp_out_unit):,.1f} °{me_temp_out_unit}")
+            s2.metric("Last-effect boiling temp", f"{_display_temperature(me_result.last_effect_boiling_temperature_c, me_temp_out_unit):,.1f} °{me_temp_out_unit}")
+            s3.metric("Overall ΔT", f"{me_result.overall_delta_t_c:.1f} °C")
+
+            st.subheader("Effect-by-effect profile")
+            effect_df = pd.DataFrame([
+                {
+                    "Effect": f"{eff.effect_number}",
+                    f"Steam temp (°C)": _display_temperature(eff.steam_temperature_c, me_temp_out_unit),
+                    f"Boiling temp (°C)": _display_temperature(eff.boiling_temperature_c, me_temp_out_unit),
+                    "BPE (°C)": eff.bpe_c,
+                    "Net ΔT (°C)": eff.delta_t_c,
+                    "Pressure (kPa abs)": eff.pressure_kpa_abs,
+                    f"Evaporation ({me_feed_rate_unit})": kg_h_to_mass_flow(eff.evaporation_kg_h, me_feed_rate_unit),
+                    "Cumulative evap (kg/h)": eff.cumulative_evaporation_kg_h,
+                    "Liquor solids (wt%)": eff.liquor_solids_wt_pct,
+                }
+                for eff in me_result.effects
+            ])
+            st.dataframe(effect_df, use_container_width=True)
+
+            # Temperature profile plot
+            effect_nums = [eff.effect_number for eff in me_result.effects]
+            steam_temps = [eff.steam_temperature_c for eff in me_result.effects]
+            boil_temps = [eff.boiling_temperature_c for eff in me_result.effects]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=effect_nums, y=steam_temps, mode="lines+markers", name="Steam temp", line=dict(dash="dash")))
+            fig.add_trace(go.Scatter(x=effect_nums, y=boil_temps, mode="lines+markers", name="Boiling temp"))
+            fig.update_layout(
+                title="Multi-effect temperature profile",
+                xaxis_title="Effect number",
+                yaxis_title="Temperature (°C)",
+                xaxis=dict(tickmode="linear", dtick=1),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Solids profile plot
+            liquor_solids = [eff.liquor_solids_wt_pct for eff in me_result.effects]
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(x=effect_nums, y=liquor_solids, name="Liquor solids (wt%)"))
+            fig2.update_layout(
+                title="Liquor solids concentration by effect",
+                xaxis_title="Effect number",
+                yaxis_title="Solids (wt%)",
+                xaxis=dict(tickmode="linear", dtick=1),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            _show_notes(me_result.notes)
+            _remember_case(
+                "evaporators-multi-effect",
+                {
+                    "n_effects": me_n_effects,
+                    "feed_rate": me_feed_rate,
+                    "feed_rate_unit": me_feed_rate_unit,
+                    "feed_solids": me_feed_solids,
+                    "product_solids": me_product_solids,
+                    "steam_pressure": me_steam_pressure,
+                    "steam_pressure_unit": me_steam_pressure_unit,
+                    "last_effect_pressure": me_last_effect_pressure,
+                    "last_effect_pressure_unit": me_last_effect_pressure_unit,
+                    "bpe_list": me_bpe_list,
+                    "specific_duty": me_duty_per_kg,
+                },
+                {
+                    "n_effects": me_result.n_effects,
+                    "total_evaporation_kg_h": me_result.total_evaporation_kg_h,
+                    "steam_flow_kg_h": me_result.steam_flow_kg_h,
+                    "steam_economy": me_result.overall_steam_economy,
+                    "effects": [
+                        {
+                            "effect_number": eff.effect_number,
+                            "steam_temp_c": eff.steam_temperature_c,
+                            "boiling_temp_c": eff.boiling_temperature_c,
+                            "bpe_c": eff.bpe_c,
+                            "delta_t_c": eff.delta_t_c,
+                            "pressure_kpa_abs": eff.pressure_kpa_abs,
+                            "evaporation_kg_h": eff.evaporation_kg_h,
+                            "liquor_solids_wt_pct": eff.liquor_solids_wt_pct,
+                        }
+                        for eff in me_result.effects
+                    ],
+                },
+            )
+        except ValueError as exc:
+            st.error(str(exc))
 
 
 
@@ -2732,13 +3164,16 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
-        ("active", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
-        ("todo", "Hydraulics: add baseline-to-curve BEP proximity and instrument-bias screening on top of the new field comparison workflow"),
+        ("active", "Evaporators: refine multi-effect staging with workbook-derived U calibration and cross-flow/backward-feed modes"),
+        ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
+        ("active", "Steam jets: vendor-specific workbook presets / mapping aids"),
+        ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
     ])
 
     st.subheader("Next queued additions")
     _render_status_lines([
+        ("done", "Evaporators: multi-effect staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening"),
+        ("done", "Evaporators: add fouling and NCG allowance screening for U-degradation and ΔT-penalty"),
         ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
         ("done", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
         ("done", "Steam jets: add workbook preview auto-normalization and family / motive-basis filtering for imported curve families"),
