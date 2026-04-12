@@ -153,6 +153,18 @@ class VesselStaticHeadResult:
 
 
 @dataclass
+class SuctionVesselNPSHAScreenResult:
+    vessel: VesselStaticHeadResult
+    static_head_to_pump_m: float
+    pump_centerline_elevation_m: float
+    npsha: NPSHAResult
+    required_npshr_m: float | None
+    npsh_margin_m: float | None
+    npsh_margin_ratio: float | None
+    notes: list[str]
+
+
+@dataclass
 class ParallelBranchResult:
     name: str
     flow_m3_h: float
@@ -585,6 +597,67 @@ def calculate_vessel_static_head(
         static_head_m=static_head_m,
         bottom_pressure_kpa_g=bottom_pressure_kpa_g,
         volume_m3=volume_m3,
+        notes=notes,
+    )
+
+
+def screen_suction_vessel_npsha(
+    vessel_height_m: float,
+    vessel_diameter_m: float,
+    level_fraction: float,
+    pump_centerline_elevation_m: float,
+    surface_pressure_value: float,
+    surface_pressure_unit: str,
+    suction_line_loss_m: float,
+    liquid_temperature_c: float,
+    velocity_m_s: float,
+    density_kg_m3: float = 1000.0,
+    required_npshr_m: float | None = None,
+) -> SuctionVesselNPSHAScreenResult:
+    vessel = calculate_vessel_static_head(
+        liquid_height_m=vessel_height_m,
+        vessel_diameter_m=vessel_diameter_m,
+        density_kg_m3=density_kg_m3,
+        level_fraction=level_fraction,
+    )
+    static_head_to_pump_m = vessel.liquid_level_m - pump_centerline_elevation_m
+    npsha = estimate_npsha(
+        surface_pressure_value=surface_pressure_value,
+        surface_pressure_unit=surface_pressure_unit,
+        static_head_m=static_head_to_pump_m,
+        suction_line_loss_m=suction_line_loss_m,
+        liquid_temperature_c=liquid_temperature_c,
+        velocity_m_s=velocity_m_s,
+        density_kg_m3=density_kg_m3,
+    )
+    margin_m = None
+    margin_ratio = None
+    notes = list(vessel.notes) + list(npsha.notes)
+    notes.append(
+        "Static suction head to the pump is screened as liquid level above the vessel bottom minus pump centerline elevation above that same datum."
+    )
+    if static_head_to_pump_m < 0.0:
+        notes.append("Pump centerline is above the vessel liquid level in this scenario, so the screen includes suction lift.")
+    if required_npshr_m is not None:
+        if required_npshr_m <= 0.0:
+            raise ValueError("Required NPSHr must be positive when provided.")
+        margin_m = npsha.npsha_m - required_npshr_m
+        margin_ratio = npsha.npsha_m / required_npshr_m
+        if margin_m < 0.0:
+            notes.append("Estimated NPSHa is below the entered NPSHr; cavitation risk is high unless the system conditions improve.")
+        elif margin_ratio < 1.1:
+            notes.append("NPSH margin is very tight in this screening check; confirm with vendor NPSHr data at the expected operating point.")
+        else:
+            notes.append("NPSHa currently exceeds the entered NPSHr, but margin expectations remain pump- and service-specific.")
+
+    return SuctionVesselNPSHAScreenResult(
+        vessel=vessel,
+        static_head_to_pump_m=static_head_to_pump_m,
+        pump_centerline_elevation_m=pump_centerline_elevation_m,
+        npsha=npsha,
+        required_npshr_m=required_npshr_m,
+        npsh_margin_m=margin_m,
+        npsh_margin_ratio=margin_ratio,
         notes=notes,
     )
 

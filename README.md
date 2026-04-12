@@ -90,6 +90,7 @@ Default URL:
   - size comparison across common stainless lines
   - pump hydraulic/brake power
   - NPSHa screening
+  - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening
   - segmented suction/discharge system breakdowns
   - parallel branch entered-split check with branch head mismatch / throttling-loss estimate
   - balancing-device screen for entered branch splits with required extra loss, equivalent Cv/Kv, and sharp-edge orifice diameter/beta estimate
@@ -97,6 +98,7 @@ Default URL:
   - vessel/static-head screen
   - control-valve Cv/Kv sizing
   - pump vs system curve overlay
+  - pump rerate / affinity screening from speed or impeller changes with relative power and NPSHr impact factors
   - liquid control-valve Cv/Kv sizing with valve-authority, trim-opening, cavitation-index, FL-based critical-ΔP, and flashing screening
 - Steam Jets
   - manual curve editor

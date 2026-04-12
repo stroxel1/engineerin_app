@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-11 20:37 CDT
+Last updated: 2026-04-12 00:50 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -9,23 +9,21 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `/Users/stephentroxel/Documents/projects/engineering_app`
 
 ## Current verified app URL
-- `http://127.0.0.1:8592`
+- `http://127.0.0.1:8594`
 - Verified HTTP status: 200 OK
-- Browser snapshot loaded the Dashboard and the Crystallizers page successfully with no browser console errors
+- Browser snapshot loaded the Dashboard and the Hydraulics section successfully with no browser console errors
+- Hydraulics > Pump & NPSHa rendered the new suction-vessel + NPSHa scenario screen cleanly during browser verification
 
 ## Current repo status
-- Working tree currently has uncommitted edits in:
+- Working tree has local edits in:
   - `README.md`
-  - `core/crystallizers.py`
-  - `core/curves.py`
-  - `core/evaporators.py`
   - `core/hydraulics.py`
+  - `core/pump_curves.py`
   - `docs/development_continuity.md`
   - `web_app.py`
 - Untracked paths:
-  - `core/pump_curves.py`
   - `data/`
-- If resuming, inspect `git status --short` first
+- If resuming, inspect `git status --short` first because prior notes in this file may lag the current git tree
 
 ## Major completed feature tranches
 1. Fresh `engineering_app` created in Documents/projects and initialized as a git repo
@@ -51,6 +49,8 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - cavitation/flashing screening
    - pump/system curve overlay
    - built-in and uploaded pump-curve matching against system curves
+   - pump rerate / affinity screening from speed or impeller changes with relative power and NPSHr factors
+   - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening
 10. Hydraulics runtime bugs fixed:
    - local pandas shadowing bug on hydraulics page
    - missing `volumetric_flow_to_m3_h` import
@@ -112,8 +112,9 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 
 ## Current active work focus
 1. Hydraulics refinement
-   - better suction/discharge vessel interaction with pump and NPSH workflows
-   - next hydraulics tranche should add pump curve affinity / rerate screening from speed or impeller changes
+   - pump curve affinity / rerate screening is now implemented in the Hydraulics > Library / upload pump-curve workflow
+   - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening is now implemented in the Pump & NPSHa tab
+   - next hydraulics tranche should extend these vessel scenarios into broader suction/discharge pump troubleshooting workflows
    - entered-split branch checks already estimate balancing-valve Cv/Kv and equivalent sharp-edge orifice size for branches that need extra throttling
 2. Steam jets
    - workbook/CSV model-family import and side-by-side comparison now implemented
@@ -123,11 +124,10 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - next crystallizer tranche should use stronger product-specific solubility or supersaturation correlations if validated data become available
 
 ## Next high-value work items
-1. Hydraulics
-   - suction/discharge vessel modeling refinement tied into pump/NPSH screens
-   - pump curve affinity / rerate screening from speed or impeller changes
-2. Steam jets
+1. Steam jets
    - vendor-layout normalization and motive-basis filtering for imported curve families
+2. Hydraulics
+   - extend suction/discharge vessel modeling from the new NPSHa scenario into broader pump troubleshooting workflows
 3. Crystallizers
    - replace screening-band heuristics with stronger validated product-specific supersaturation or metastable-zone data when available
 4. Evaporators
@@ -158,5 +158,5 @@ import engineering_app.web_app
 print('import ok')
 PY`
 7. Check live app:
-   `curl -I -s http://127.0.0.1:8592`
+   `curl -I -s http://127.0.0.1:8594`
 8. Continue the active work focus instead of rediscovering completed work

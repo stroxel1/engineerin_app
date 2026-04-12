@@ -34,6 +34,19 @@ class PumpCurveAffinityResult:
     notes: list[str]
 
 
+@dataclass
+class PumpCurveRerateScreenResult:
+    base_curve: PumpCurveModel
+    scaled_curve: PumpCurveModel
+    base_intersection: PumpCurveIntersection | None
+    scaled_intersection: PumpCurveIntersection | None
+    speed_ratio: float
+    impeller_ratio: float
+    relative_power_factor: float
+    relative_npshr_factor: float
+    notes: list[str]
+
+
 BUILTIN_PUMP_CURVES: dict[str, PumpCurveModel] = {
     "ansi_50hz_trimmed": PumpCurveModel(
         name="ANSI process pump - trimmed impeller",
@@ -214,5 +227,67 @@ def scale_curve_by_affinity_laws(
             points=scaled_points,
             notes=curve.notes + notes,
         ),
+        notes=notes,
+    )
+
+
+def screen_affinity_rerate(
+    curve: PumpCurveModel,
+    static_head_m: float,
+    k_factor_m_per_m3h2: float,
+    speed_ratio: float = 1.0,
+    impeller_ratio: float = 1.0,
+    point_count: int = 400,
+) -> PumpCurveRerateScreenResult:
+    affinity = scale_curve_by_affinity_laws(
+        curve,
+        speed_ratio=speed_ratio,
+        impeller_ratio=impeller_ratio,
+    )
+    base_intersection = find_curve_system_intersection(
+        curve,
+        static_head_m,
+        k_factor_m_per_m3h2,
+        point_count=point_count,
+    )
+    scaled_intersection = find_curve_system_intersection(
+        affinity.scaled_curve,
+        static_head_m,
+        k_factor_m_per_m3h2,
+        point_count=point_count,
+    )
+    relative_power_factor = (speed_ratio ** 3) * (impeller_ratio ** 3)
+    relative_npshr_factor = (speed_ratio ** 2) * (impeller_ratio ** 2)
+    notes = list(affinity.notes)
+    notes.append(
+        "Relative power factor is screened with P ∝ N³·D³. Check motor amps, service factor, and shaft limits before increasing speed or diameter."
+    )
+    notes.append(
+        "Relative NPSHr factor is screened with NPSHr ∝ N²·D² as a practical approximation. Verify against vendor data before concluding suction margin is adequate."
+    )
+    if base_intersection is not None and scaled_intersection is not None:
+        delta_flow_pct = (
+            (scaled_intersection.flow_m3_h - base_intersection.flow_m3_h)
+            / max(base_intersection.flow_m3_h, 1.0e-9)
+            * 100.0
+        )
+        delta_head_pct = (
+            (scaled_intersection.head_m - base_intersection.head_m)
+            / max(base_intersection.head_m, 1.0e-9)
+            * 100.0
+        )
+        notes.append(
+            f"On the current system curve, the screened rerate shifts the operating point by {delta_flow_pct:+.1f}% flow and {delta_head_pct:+.1f}% head."
+        )
+
+    return PumpCurveRerateScreenResult(
+        base_curve=curve,
+        scaled_curve=affinity.scaled_curve,
+        base_intersection=base_intersection,
+        scaled_intersection=scaled_intersection,
+        speed_ratio=speed_ratio,
+        impeller_ratio=impeller_ratio,
+        relative_power_factor=relative_power_factor,
+        relative_npshr_factor=relative_npshr_factor,
         notes=notes,
     )

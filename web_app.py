@@ -40,6 +40,7 @@ from engineering_app.core.hydraulics import (
     compare_schedule_10s_sizes,
     estimate_npsha,
     find_pump_system_intersection,
+    screen_suction_vessel_npsha,
     fitting_k_from_counts,
     recommend_schedule_10s_size,
     size_branch_balancing_device,
@@ -52,7 +53,7 @@ from engineering_app.core.pump_curves import (
     build_curve_from_xy_rows as build_pump_curve_from_xy_rows,
     find_curve_system_intersection,
     get_builtin_curve,
-    scale_curve_by_affinity_laws,
+    screen_affinity_rerate,
 )
 from engineering_app.core.quicktools import (
     brix_reconciliation,
@@ -188,10 +189,10 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Hydraulics refinement: better vessel/suction/discharge interaction with pump and NPSH screens"),
             ("active", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
-            ("active", "Hydraulics refinement: pump curve affinity / rerate screening from speed or impeller changes"),
-            ("todo", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
+            ("active", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
+            ("active", "Hydraulics refinement: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
+            ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -201,6 +202,8 @@ def render_dashboard() -> None:
             ("done", "Valve/fitting K-factor counting and TDH breakdown"),
             ("done", "Pump/system curve overlay"),
             ("done", "Hydraulics pump curve library/upload matched against system curves"),
+            ("done", "Pump rerate / affinity screening from speed or impeller changes"),
+            ("done", "Suction vessel + NPSHa scenario with optional NPSHr margin screening"),
             ("done", "Parallel branch balancing-device Cv/Kv and orifice sizing screen"),
             ("done", "Citric crystallizer slurry basis plus supersaturation / metastable-band screening"),
             ("done", "Parallel branch and vessel/static-head screens"),
@@ -1151,11 +1154,56 @@ def render_hydraulics() -> None:
         surface_pressure_unit = n2.selectbox("Surface pressure unit", PRESSURE_UNITS, index=6, key="hyd_npsh_surface_unit")
         static_head_m = n3.number_input("Static suction head (+ flooded / - lift)", value=2.0, key="hyd_npsh_static_head")
         liquid_temp = n4.number_input("Liquid temperature (°C)", value=35.0, key="hyd_npsh_temp")
-        suction_loss = st.number_input("Suction-line loss (head, m)", value=max(result.head_loss_m * 0.3, 0.1), key="hyd_npsh_loss")
+        suction_loss = st.number_input("Suction-line loss (head, m)", value=min(max(result.head_loss_m * 0.3, 0.1), 5.0), key="hyd_npsh_loss")
         npsha = estimate_npsha(surface_pressure, surface_pressure_unit, static_head_m, suction_loss, liquid_temp, result.velocity_m_s, density_kg_m3)
         st.metric("NPSHa", f"{npsha.npsha_m:,.2f} m")
         _show_notes(npsha.notes)
         st.json(asdict(npsha))
+
+        st.divider()
+        st.subheader("Suction vessel + NPSHa scenario")
+        st.caption("Turn vessel level into suction head at the pump centerline, then compare the resulting NPSHa against an entered NPSHr when troubleshooting suction limitations.")
+        sv1, sv2, sv3, sv4 = st.columns(4)
+        vessel_height_for_npsh = sv1.number_input("Suction vessel straight-side height", min_value=0.1, value=6.0, key="hyd_npsh_vessel_height")
+        vessel_height_unit_for_npsh = sv2.selectbox("Vessel height unit", LENGTH_UNITS, index=0, key="hyd_npsh_vessel_height_unit")
+        vessel_diameter_for_npsh = sv3.number_input("Suction vessel diameter", min_value=0.1, value=2.5, key="hyd_npsh_vessel_diameter")
+        vessel_diameter_unit_for_npsh = sv4.selectbox("Vessel diameter unit", LENGTH_UNITS, index=0, key="hyd_npsh_vessel_diameter_unit")
+        sv5, sv6, sv7, sv8 = st.columns(4)
+        vessel_level_fraction_for_npsh = sv5.number_input("Liquid level fraction", min_value=0.0, value=0.65, key="hyd_npsh_vessel_level_fraction")
+        pump_centerline_elevation = sv6.number_input("Pump centerline elevation above vessel bottom", value=1.0, key="hyd_npsh_pump_centerline")
+        pump_centerline_unit = sv7.selectbox("Pump elevation unit", LENGTH_UNITS, index=0, key="hyd_npsh_pump_centerline_unit")
+        required_npshr_enabled = sv8.checkbox("Compare against required NPSHr", value=True, key="hyd_npsh_required_enabled")
+        sv9, sv10, sv11 = st.columns(3)
+        required_npshr_value = sv9.number_input("Required NPSHr", min_value=0.01, value=4.5, key="hyd_npsh_required_value", disabled=not required_npshr_enabled)
+        required_npshr_unit = sv10.selectbox("Required NPSHr unit", LENGTH_UNITS, index=0, key="hyd_npsh_required_unit", disabled=not required_npshr_enabled)
+        vessel_head_output_unit = sv11.selectbox("Scenario head output unit", LENGTH_UNITS, index=0, key="hyd_npsh_scenario_head_out")
+        suction_vessel_screen = screen_suction_vessel_npsha(
+            vessel_height_m=length_to_m(vessel_height_for_npsh, vessel_height_unit_for_npsh),
+            vessel_diameter_m=length_to_m(vessel_diameter_for_npsh, vessel_diameter_unit_for_npsh),
+            level_fraction=vessel_level_fraction_for_npsh,
+            pump_centerline_elevation_m=length_to_m(pump_centerline_elevation, pump_centerline_unit),
+            surface_pressure_value=surface_pressure,
+            surface_pressure_unit=surface_pressure_unit,
+            suction_line_loss_m=suction_loss,
+            liquid_temperature_c=liquid_temp,
+            velocity_m_s=result.velocity_m_s,
+            density_kg_m3=density_kg_m3,
+            required_npshr_m=length_to_m(required_npshr_value, required_npshr_unit) if required_npshr_enabled else None,
+        )
+        sm1, sm2, sm3, sm4 = st.columns(4)
+        sm1.metric("Liquid level", f"{m_to_length(suction_vessel_screen.vessel.liquid_level_m, vessel_head_output_unit):,.2f} {vessel_head_output_unit}")
+        sm2.metric("Static head to pump", f"{m_to_length(suction_vessel_screen.static_head_to_pump_m, vessel_head_output_unit):,.2f} {vessel_head_output_unit}")
+        sm3.metric("Scenario NPSHa", f"{m_to_length(suction_vessel_screen.npsha.npsha_m, vessel_head_output_unit):,.2f} {vessel_head_output_unit}")
+        if suction_vessel_screen.npsh_margin_m is not None and suction_vessel_screen.npsh_margin_ratio is not None:
+            sm4.metric(
+                "NPSH margin",
+                f"{m_to_length(suction_vessel_screen.npsh_margin_m, vessel_head_output_unit):,.2f} {vessel_head_output_unit}",
+                delta=f"{suction_vessel_screen.npsh_margin_ratio:,.2f}x NPSHr",
+            )
+        else:
+            sm4.metric("NPSH margin", "Enter NPSHr")
+        _show_notes(suction_vessel_screen.notes)
+        st.json(asdict(suction_vessel_screen))
 
     with tabs[3]:
         st.caption("Enter up to three sequential piping sections to estimate total system TDH and pressure drop.")
@@ -1482,6 +1530,96 @@ def render_hydraulics() -> None:
                 fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
                 st.plotly_chart(fig, use_container_width=True)
                 _show_notes(selected_curve.notes)
+
+                st.divider()
+                st.subheader("Pump rerate / affinity screening")
+                st.caption("Screen speed or impeller changes against the same system curve before ordering a rerate. Outputs are unit-selectable; confirm final NPSHr and power with vendor data.")
+                unit_col1, unit_col2 = st.columns(2)
+                affinity_flow_unit = unit_col1.selectbox("Rerate output flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_curve_affinity_flow_unit")
+                affinity_head_unit = unit_col2.selectbox("Rerate output head unit", LENGTH_UNITS, index=0, key="hyd_curve_affinity_head_unit")
+                speed_col1, speed_col2 = st.columns(2)
+                base_speed_rpm = speed_col1.number_input("Base speed (rpm)", min_value=1.0, value=1780.0, key="hyd_curve_affinity_base_speed")
+                rerated_speed_rpm = speed_col2.number_input("Rerated speed (rpm)", min_value=1.0, value=1780.0, key="hyd_curve_affinity_new_speed")
+                imp_col1, imp_col2, imp_col3 = st.columns(3)
+                impeller_unit = imp_col3.selectbox("Impeller diameter unit", LENGTH_UNITS, index=3, key="hyd_curve_affinity_impeller_unit")
+                base_impeller = imp_col1.number_input("Base impeller diameter", min_value=0.01, value=10.0, key="hyd_curve_affinity_base_impeller")
+                rerated_impeller = imp_col2.number_input("Rerated impeller diameter", min_value=0.01, value=10.0, key="hyd_curve_affinity_new_impeller")
+                speed_ratio = rerated_speed_rpm / max(base_speed_rpm, 1.0e-9)
+                impeller_ratio = length_to_m(rerated_impeller, impeller_unit) / max(length_to_m(base_impeller, impeller_unit), 1.0e-12)
+                rerate = screen_affinity_rerate(
+                    selected_curve,
+                    static_head_m=static_curve_head,
+                    k_factor_m_per_m3h2=k_factor,
+                    speed_ratio=speed_ratio,
+                    impeller_ratio=impeller_ratio,
+                )
+                base_curve_flow_display = [m3_h_to_volumetric_flow(point.flow_m3_h, affinity_flow_unit) for point in rerate.base_curve.points]
+                base_curve_head_display = [m_to_length(point.head_m, affinity_head_unit) for point in rerate.base_curve.points]
+                scaled_curve_flow_display = [m3_h_to_volumetric_flow(point.flow_m3_h, affinity_flow_unit) for point in rerate.scaled_curve.points]
+                scaled_curve_head_display = [m_to_length(point.head_m, affinity_head_unit) for point in rerate.scaled_curve.points]
+                system_curve_flow_display = [m3_h_to_volumetric_flow(point.flow_m3_h, affinity_flow_unit) for point in system_curve_points]
+                system_curve_head_display = [m_to_length(point.total_dynamic_head_m, affinity_head_unit) for point in system_curve_points]
+
+                r1, r2, r3, r4 = st.columns(4)
+                r1.metric("Speed ratio", f"{rerate.speed_ratio:,.3f}x")
+                r2.metric("Impeller ratio", f"{rerate.impeller_ratio:,.3f}x")
+                r3.metric("Relative power", f"{rerate.relative_power_factor * 100.0:,.1f}%")
+                r4.metric("Relative NPSHr", f"{rerate.relative_npshr_factor * 100.0:,.1f}%")
+                if rerate.base_intersection is not None and rerate.scaled_intersection is not None:
+                    base_flow_display = m3_h_to_volumetric_flow(rerate.base_intersection.flow_m3_h, affinity_flow_unit)
+                    scaled_flow_display = m3_h_to_volumetric_flow(rerate.scaled_intersection.flow_m3_h, affinity_flow_unit)
+                    base_head_display = m_to_length(rerate.base_intersection.head_m, affinity_head_unit)
+                    scaled_head_display = m_to_length(rerate.scaled_intersection.head_m, affinity_head_unit)
+                    delta_flow_pct = (rerate.scaled_intersection.flow_m3_h - rerate.base_intersection.flow_m3_h) / max(rerate.base_intersection.flow_m3_h, 1.0e-9) * 100.0
+                    delta_head_pct = (rerate.scaled_intersection.head_m - rerate.base_intersection.head_m) / max(rerate.base_intersection.head_m, 1.0e-9) * 100.0
+                    op1, op2, op3, op4 = st.columns(4)
+                    op1.metric("Base operating flow", f"{base_flow_display:,.1f} {affinity_flow_unit}")
+                    op2.metric("Rerated operating flow", f"{scaled_flow_display:,.1f} {affinity_flow_unit}", delta=f"{delta_flow_pct:+.1f}%")
+                    op3.metric("Base operating head", f"{base_head_display:,.2f} {affinity_head_unit}")
+                    op4.metric("Rerated operating head", f"{scaled_head_display:,.2f} {affinity_head_unit}", delta=f"{delta_head_pct:+.1f}%")
+
+                affinity_fig = go.Figure()
+                affinity_fig.add_trace(go.Scatter(x=system_curve_flow_display, y=system_curve_head_display, mode="lines", name="System curve"))
+                affinity_fig.add_trace(go.Scatter(x=base_curve_flow_display, y=base_curve_head_display, mode="lines+markers", name=f"Base curve: {rerate.base_curve.name}"))
+                affinity_fig.add_trace(go.Scatter(x=scaled_curve_flow_display, y=scaled_curve_head_display, mode="lines+markers", name="Rerated curve"))
+                if rerate.base_intersection is not None:
+                    affinity_fig.add_trace(go.Scatter(
+                        x=[m3_h_to_volumetric_flow(rerate.base_intersection.flow_m3_h, affinity_flow_unit)],
+                        y=[m_to_length(rerate.base_intersection.head_m, affinity_head_unit)],
+                        mode="markers",
+                        marker=dict(size=11),
+                        name="Base operating point",
+                    ))
+                if rerate.scaled_intersection is not None:
+                    affinity_fig.add_trace(go.Scatter(
+                        x=[m3_h_to_volumetric_flow(rerate.scaled_intersection.flow_m3_h, affinity_flow_unit)],
+                        y=[m_to_length(rerate.scaled_intersection.head_m, affinity_head_unit)],
+                        mode="markers",
+                        marker=dict(size=11, symbol="diamond"),
+                        name="Rerated operating point",
+                    ))
+                affinity_fig.update_layout(
+                    title=f"{selected_curve.name} rerate screen",
+                    xaxis_title=f"Flow ({affinity_flow_unit})",
+                    yaxis_title=f"Head ({affinity_head_unit})",
+                )
+                st.plotly_chart(affinity_fig, use_container_width=True)
+                rerate_df = pd.DataFrame([
+                    {
+                        "Case": "Base",
+                        f"Operating flow ({affinity_flow_unit})": m3_h_to_volumetric_flow(rerate.base_intersection.flow_m3_h, affinity_flow_unit) if rerate.base_intersection is not None else None,
+                        f"Operating head ({affinity_head_unit})": m_to_length(rerate.base_intersection.head_m, affinity_head_unit) if rerate.base_intersection is not None else None,
+                        "% of curve max flow": rerate.base_intersection.fraction_of_curve_max_flow * 100.0 if rerate.base_intersection is not None else None,
+                    },
+                    {
+                        "Case": "Rerated",
+                        f"Operating flow ({affinity_flow_unit})": m3_h_to_volumetric_flow(rerate.scaled_intersection.flow_m3_h, affinity_flow_unit) if rerate.scaled_intersection is not None else None,
+                        f"Operating head ({affinity_head_unit})": m_to_length(rerate.scaled_intersection.head_m, affinity_head_unit) if rerate.scaled_intersection is not None else None,
+                        "% of curve max flow": rerate.scaled_intersection.fraction_of_curve_max_flow * 100.0 if rerate.scaled_intersection is not None else None,
+                    },
+                ])
+                st.dataframe(rerate_df, use_container_width=True)
+                _show_notes(rerate.notes)
 
     _remember_case(
         "hydraulics",
@@ -2312,16 +2450,17 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Hydraulics: strengthen suction/discharge vessel interaction with pump and NPSH workflows"),
         ("active", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
-        ("active", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
+        ("active", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
+        ("active", "Hydraulics: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
     ])
 
     st.subheader("Next queued additions")
     _render_status_lines([
         ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
-        ("todo", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
-        ("todo", "Hydraulics: refine suction/discharge vessel handling around pump/NPSH workflows"),
+        ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+        ("done", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
+        ("done", "Hydraulics: add suction vessel + NPSHa scenario with optional NPSHr margin screening"),
         ("done", "Crystallizers: add metastable-zone and supersaturation screening on top of citric solubility-based slurry"),
         ("done", "Hydraulics: add balancing-valve/orifice coefficient sizing from parallel branch split checks"),
         ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
