@@ -6,12 +6,18 @@ available, without pretending we already know the vendor sheet schema.
 """
 
 from __future__ import annotations
-
 from typing import Any
 
 from engineering_app.core.curves import CurveLibrary, build_curve_library_from_table
 from engineering_app.io.contracts import NormalizedTable
 from engineering_app.io.schema_inference import classify_sheet
+from engineering_app.io.vendor_presets import (
+    VendorColumnMapping,
+    VENDOR_PRESETS,
+    GENERIC_AUTO_DETECT,
+    get_vendor_preset,
+    detect_vendor_from_sheet,
+)
 
 NAME_TOKENS = {"model", "curve", "curve_name", "model_name", "tag", "name", "ejector", "compressor"}
 FAMILY_TOKENS = {"family", "basis", "series", "service", "motive", "steam", "pressure", "header", "discharge"}
@@ -232,13 +238,25 @@ def normalize_preview_table(sheet_name: str, sample_rows: list[list[Any]]) -> No
     )
 
 
-def normalize_curve_workbook(inspection: dict[str, Any]) -> CurveLibrary:
+def normalize_curve_workbook(
+    inspection: dict[str, Any],
+    vendor_preset: str | None = None,
+) -> CurveLibrary:
     """Convert workbook inspection output into a normalized curve library.
 
     Uses preview rows only, so results remain a screening aid. The goal is to
     recover useful candidate curves even when vendor workbooks use motive-basis
     columns instead of an explicit family field.
+
+    If vendor_preset is provided, uses that vendor's column-mapping heuristics
+    for faster and more reliable normalization. If None, the app tries to
+    auto-detect vendor format from sheet name/headers before falling back to
+    generic token-based column scoring.
     """
+
+    vendor: VendorColumnMapping | None = None
+    if vendor_preset:
+        vendor = get_vendor_preset(vendor_preset)
 
     normalized_tables = [
         normalize_preview_table(sheet.get("sheet_name", ""), sheet.get("sample_rows", []))
@@ -252,20 +270,47 @@ def normalize_curve_workbook(inspection: dict[str, Any]) -> CurveLibrary:
             continue
 
         columns = list(table.header)
-        name_col = _pick_column(table.rows, columns, NAME_TOKENS, require_numeric=False)
-        x_col = _pick_column(table.rows, columns, X_TOKENS, require_numeric=True)
+
+        # If vendor preset is available, use its tokens; otherwise auto-detect or fallback
+        this_vendor = vendor
+        if this_vendor is None:
+            this_vendor = detect_vendor_from_sheet(table.sheet_name, columns)
+
+        if this_vendor is not None:
+            name_tokens = this_vendor.name_tokens
+            x_tokens = this_vendor.x_tokens
+            y_tokens = this_vendor.y_tokens
+            family_tokens = this_vendor.family_tokens
+            penalty_tokens = this_vendor.penalty_tokens
+            if vendor_preset:
+                notes.append(
+                    f"Sheet '{table.sheet_name}': using '{this_vendor.vendor}' vendor mapping preset."
+                )
+            else:
+                notes.append(
+                    f"Sheet '{table.sheet_name}': auto-detected '{this_vendor.vendor}' format from sheet/column names."
+                )
+        else:
+            name_tokens = NAME_TOKENS
+            x_tokens = X_TOKENS
+            y_tokens = Y_TOKENS
+            family_tokens = FAMILY_TOKENS
+            penalty_tokens = PRESSURE_TOKENS
+
+        name_col = _pick_column(table.rows, columns, name_tokens, require_numeric=False)
+        x_col = _pick_column(table.rows, columns, x_tokens, require_numeric=True)
         y_col = _pick_column(
             table.rows,
             columns,
-            Y_TOKENS,
-            penalty_tokens=PRESSURE_TOKENS,
+            y_tokens,
+            penalty_tokens=penalty_tokens,
             require_numeric=True,
             excluded={x_col} if x_col else None,
         )
         explicit_family_col = _pick_column(
             table.rows,
             columns,
-            {"family", "basis", "series"},
+            family_tokens,
             require_numeric=False,
             excluded={name_col, x_col, y_col} - {None},
         )

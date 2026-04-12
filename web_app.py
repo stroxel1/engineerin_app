@@ -2150,6 +2150,19 @@ def render_steam_jets() -> None:
         f1, f2 = st.columns(2)
         x_unit = f1.selectbox("Imported x-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_x_unit")
         y_unit = f2.selectbox("Imported y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_y_unit")
+        from engineering_app.io.vendor_presets import VENDOR_NAMES, GENERIC_AUTO_DETECT
+        vendor_choice = st.selectbox(
+            "Vendor preset",
+            [GENERIC_AUTO_DETECT] + VENDOR_NAMES,
+            index=0,
+            key="sj_vendor_preset",
+        )
+        vendor_hint = GENERIC_AUTO_DETECT if vendor_choice == GENERIC_AUTO_DETECT else vendor_choice
+        st.caption(
+            "Vendor presets auto-detect column layouts for known steam-jet vendors. "
+            "Auto-detect infers format from sheet/column names. "
+            "Select a specific vendor to force that vendor's mapping rules."
+        )
         uploaded_family = st.file_uploader("Upload steam-jet model-family table", type=["csv", "xlsx", "xlsm"], key="sj_family_upload")
         family_df = None
         source_sheet = None
@@ -2183,7 +2196,8 @@ def render_steam_jets() -> None:
                     temp_path = Path(handle.name)
                 try:
                     inspection = inspect_workbook(temp_path)
-                    normalized_library = normalize_curve_workbook(inspection)
+                    vendor_preset_arg = None if vendor_hint == GENERIC_AUTO_DETECT else vendor_choice
+                    normalized_library = normalize_curve_workbook(inspection, vendor_preset=vendor_preset_arg)
                     normalized_notes = normalized_library.notes
                     preferred_library_mode = "normalized" if normalized_library.curves else "manual"
                 finally:

@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-12 09:10 CDT
+Last updated: 2026-04-12 09:25 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -74,7 +74,12 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
     - Combined capacity penalty with U-degradation and delta-T penalty breakdown
     - Engineering notes when degradation exceeds 25% and 50% thresholds
     - UI under Steam > Evaporator
-14. Crystallizers expanded with:
+14. Steam jets with multi-effect evaporator staging added:
+    - Multi-effect evaporator screening with per-effect BPE, ΔT distribution, and steam economy
+    - Effect-by-effect temperature and solids profile plots
+    - Vendor presets for steam-jet workbook import (Croll-Reynolds, Graham, Schutte & Koerting, GEA)
+    - Auto-detection of vendor format from sheet name and column headers
+15. Citric crystallizers expanded with:
    - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
    - crystal-volume-percent slurry basis for citric crystallizers
    - supersaturation / metastable-band screening from feed solids versus equilibrium mother-liquor solids
