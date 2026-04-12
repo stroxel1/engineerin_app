@@ -193,26 +193,34 @@ def estimate_citric_bpe(
         # Use the Dühring-rule correlation as the primary high-solids estimate.
         # It is physically grounded (T_sol/T_water scaling) and calibrated to the
         # same 15-60 wt% table that feeds the worksheet values.
-        bpe_f_duhring = duhring_high_solids_bpe_f(ds)
+        bpe_f_1atm = duhring_high_solids_bpe_f(ds)  # keep for reference in delta notes at 1 atm
         bpe_f_poly = workbook_high_solids_bpe_f(ds)
+
+        # Compute pressure-corrected BPE using Dühring scaling.
+        water_only = build_thermal_point(pressure_value, pressure_unit, 0.0)
+        t_water_c = water_only.saturation_temperature_c
+        bpe_c_scaled = bpe_from_duhring(ds, t_water_c)
+        bpe_f = _c_to_f(bpe_c_scaled)
 
         # Report the Dühring value but also show the delta from the polynomial
         # method so users can judge sensitivity.
-        bpe_f = bpe_f_duhring
         result_method = "duhring_rule_high_solids"
         notes.append(
             f"Above-60 wt% BPE uses a Dühring-rule correlation calibrated to the 15-60 wt% "
             f"table (slope vs conc R² = 0.999996).  Treat extrapolated values as screening "
             f"estimates — not validated design data."
         )
-        delta_f = bpe_f_duhring - bpe_f_poly
-        if abs(delta_f) > 0.1:
-            notes.append(
-                f"Dühring estimate differs from the workbook polynomial extrapolation by "
-                f"{delta_f:+.3f} °F ({_f_to_c(delta_f):+.3f} °C).  The quadratic method "
-                f"was originally a 15-60 wt% fit extended beyond 60 wt% without a physical "
-                f"pressure-scaling basis."
-            )
+        # Compare the pressure-scaled Dühring value against the legacy
+        # polynomial method at 1 atm as a sensitivity reference.
+        delta_f_1atm = bpe_f_1atm - bpe_f_poly
+        notes.append(
+            f"At 1 atm the Dühring extrapolation for {ds:.0f} wt% gives "
+            f"BPE {bpe_f_1atm:.3f} °F vs the workbook polynomial "
+            f"at {bpe_f_poly:.3f} °F (delta {delta_f_1atm:+.3f} °F = "
+            f"{_f_to_c(delta_f_1atm):+.3f} °C).  The quadratic method was a "
+            f"15-60 wt% fit extended beyond 60 wt% without a physical "
+            f"pressure-scaling basis."
+        )
         if ds >= 70.0:
             notes.append(
                 f"At {ds:.0f} wt% the solution is approaching a near-melt / viscous regime. "
