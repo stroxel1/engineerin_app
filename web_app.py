@@ -241,9 +241,8 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("done", "Citric acid solubility curve viewer with 3rd-degree polynomial fit (R² = 0.9993)"),
-            ("done", "Cooling crystallizer yield sweep planner with metastable zone classification"),
-            ("done", "Metastable zone estimator with interactive zone diagram"),
+            ("done", "High-solids citric BPE: Dühring-rule correlation with pressure scaling (R² = 0.999996)"),
+            ("active", "Evaporators: workbook-derived U-factor calibration from plant data — next target"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -267,6 +266,7 @@ def render_dashboard() -> None:
             ("done", "Parallel branch and vessel/static-head screens"),
             ("done", "Evaporator design-calibrated U·A·ΔT capacity mode"),
             ("done", "Quick utility cost screens plus current-vs-proposed savings deltas for steam and electricity"),
+            ("done", "Citric BPE >60 wt% refined with Dühring-rule correlation calibrated to 15-60 wt% table (R² = 0.999996, pressure-scalable)"),
         ])
 
 

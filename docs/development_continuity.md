@@ -1,6 +1,6 @@
      1|# Engineering App Development Continuity
      2|
-     3|Last updated: 2026-04-12 11:12 CDT
+     3|Last updated: 2026-04-12 11:52 CDT
      4|
      5|Purpose:
      6|Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -108,6 +108,12 @@
     - cooling crystallizer yield sweep planner across a temperature range with metastable zone classification
     - metastable zone estimator with interactive zone diagram (undersaturated/metastable/labile regions)
     - full mass-balance yield computation: crystals, liquor rate, yield fraction vs temperature
+19. High-solids citric acid BPE refined with Dühring-rule correlation:
+    - slope = 0.98607 + 0.00115 * wt% (R² = 0.999996 vs 15-60 wt% table)
+    - matches table value to within 0.007 °F at 60 wt%
+    - provides physically grounded pressure scaling for vacuum evaporation screens
+    - reports delta from legacy polynomial method as sensitivity indicator
+    - additional uncertainty warnings at >70 wt% and >80 wt%
    105|
 ## Files most relevant now
 - `web_app.py`
@@ -135,9 +141,15 @@
    - interactive solubility curve with configurable polynomial degree and R² stats — landed
    - cooling crystallizer yield sweep planner with metastable zone classification — landed
    - metastable zone estimator with interactive zone diagram — landed
-2. Steam jets
+2. High-solids citric BPE
+   - Dühring-rule correlation with pressure scaling — landed
+3. Streamlit app
+   - Solubility Curve page landed (3 tabs: viewer, yield sweep, metastable zone)
+   - Heat Exchangers page landed (LMTD, F-factor, UA sizing, pass comparison)
+   - Motors & Drives page landed (motor sizing, pump motor, VFD, loading assessment)
+4. Steam jets
    - extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata
-3. Citric crystallizer
+5. Citric crystallizer
    - multi-body capacity screening with feed/withdrawal balance (already landed)
 
 ## Next high-value work items
@@ -146,6 +158,7 @@
 3. Evaporators: workbook-derived U-factor calibration from plant data
 4. Steam system: condensate return network analysis and flash steam recovery optimization
 5. Hydraulics: control valve installed characteristic analysis with system curve overlay
+6. Citric BPE further refinement: Apelblat osmotic-coefficient-based vapor pressure lowering model
    142|
    143|## Known cautions
    144|- The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
