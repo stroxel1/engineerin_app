@@ -119,6 +119,18 @@ from engineering_app.core.units import (
     length_to_m,
     seconds_to_time,
 )
+from engineering_app.core.heat_exchangers import (
+    compare_pass_arrangements,
+    size_heat_exchanger,
+    calculate_lmtd,
+    calculate_f_factor,
+)
+from engineering_app.core.motors import (
+    assess_motor_loading,
+    calculate_motor_size,
+    calculate_pump_motor,
+    estimate_vfd_savings,
+)
 from engineering_app.io.normalizers import normalize_curve_workbook, normalize_inspection
 from engineering_app.io.workbook_inspector import inspect_workbook
 
@@ -188,17 +200,31 @@ def _render_status_lines(items: list[tuple[str, str]]) -> None:
 
 def render_dashboard() -> None:
     st.title("Engineering App")
-    st.write("Practical plant engineering tools for steam, hydraulics, evaporation, crystallization, solution properties, and workbook inspection.")
-    cols = st.columns(6)
+    st.write("Practical plant engineering tools for steam, hydraulics, heat exchangers, evaporation, crystallization, motors & drives, solution properties, and workbook inspection.")
+    cols = st.columns(4)
     cards = [
         ("Quick tools", "Conversions, flash steam, blending, tank inventory, Brix reconciliation, and utility cost"),
         ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
         ("Hydraulics", "Line sizing, TDH, branches, vessels, valves, pump power, and NPSHa"),
-        ("Steam jets", "Curve comparison and operating-point screening"),
-        ("Evaporators", "Duty, steam demand, ΔT, and design-calibrated U·A·ΔT capacity screening"),
-        ("Crystallizers", "Citric solubility-based mother liquor, crystal vol% slurry, yield, circulation ratio, and residence time"),
+        ("Heat Exchangers", "LMTD, F-factor, UA-based area sizing, and pass arrangement comparison"),
+        ("Steam jets", "Curve comparison, workbook import, and thermo-compressor screening"),
+        ("Steam & Utilities", "Steam demand, duty back-calculation, and header pressure-change screens"),
+        ("Evaporators", "Duty, steam demand, ΔT, multi-effect staging, fouling/NCG, and body-by-body"),
+        ("Crystallizers", "Citric solubility-based slurry, yield, circulation ratio, and residence time"),
+        ("Motors & Drives", "Motor sizing, pump motor power, VFD savings, and loading checks"),
+        ("Workbook Import", "Excel/CSV inspection and steam-jet curve family import"),
     ]
-    for col, (title, desc) in zip(cols, cards):
+    for col, (title, desc) in zip(cols, cards[:4]):
+        with col:
+            st.metric(title, "Ready")
+            st.caption(desc)
+    cols2 = st.columns(4)
+    for col, (title, desc) in zip(cols2, cards[4:8]):
+        with col:
+            st.metric(title, "Ready")
+            st.caption(desc)
+    cols3 = st.columns(2)
+    for col, (title, desc) in zip(cols3, cards[8:]):
         with col:
             st.metric(title, "Ready")
             st.caption(desc)
@@ -208,8 +234,8 @@ def render_dashboard() -> None:
         st.subheader("Currently being advanced")
         _render_status_lines([
             ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
-            ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
-            ("todo", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance — landed"),
+            ("done", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
+            ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance — landed"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -2155,7 +2181,7 @@ def render_steam_jets() -> None:
         f1, f2 = st.columns(2)
         x_unit = f1.selectbox("Imported x-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_x_unit")
         y_unit = f2.selectbox("Imported y-axis unit", GENERIC_CURVE_UNITS, index=0, key="sj_family_y_unit")
-        from engineering_app.io.vendor_presets import VENDOR_NAMES, GENERIC_AUTO_DETECT
+        from engineering_app.io.vendor_presets import VENDOR_NAMES, GENERIC_AUTO_DETECT, suggest_mapping_from_vendor_preset, VENDOR_PRESETS
         vendor_choice = st.selectbox(
             "Vendor preset",
             [GENERIC_AUTO_DETECT] + VENDOR_NAMES,
@@ -2163,6 +2189,16 @@ def render_steam_jets() -> None:
             key="sj_vendor_preset",
         )
         vendor_hint = GENERIC_AUTO_DETECT if vendor_choice == GENERIC_AUTO_DETECT else vendor_choice
+
+        # Vendor preset reference cards (always visible, above upload)
+        with st.expander("Vendor preset reference — click to see what each vendor format looks like"):
+            for vp in VENDOR_PRESETS:
+                st.markdown(f"**{vp.vendor}** — {vp.notes}")
+                st.caption(f"Name tokens: {', '.join(sorted(vp.name_tokens))}")
+                st.caption(f"X tokens: {', '.join(sorted(vp.x_tokens))} | Y tokens: {', '.join(sorted(vp.y_tokens))}")
+                st.caption(f"Family patterns: {', '.join(vp.family_column_patterns)} | Unit hints: X={vp.x_unit_hint}, Y={vp.y_unit_hint}")
+                st.divider()
+
         st.caption(
             "Vendor presets auto-detect column layouts for known steam-jet vendors. "
             "Auto-detect infers format from sheet/column names. "
@@ -2174,6 +2210,7 @@ def render_steam_jets() -> None:
         normalized_library = None
         normalized_notes: list[str] = []
         preferred_library_mode = "manual"
+        vendor_suggestion = None
         if uploaded_family is None:
             default_family_df = pd.DataFrame([
                 {"model": "TC-A", "family": "Motive 3.5 barg", "suction_load": 2000.0, "motive_steam": 3200.0},
@@ -2212,18 +2249,47 @@ def render_steam_jets() -> None:
                 family_df = pd.read_excel(workbook, sheet_name=source_sheet)
             st.dataframe(family_df.head(20), use_container_width=True)
 
+        # Vendor mapping suggestion panel — runs against whatever columns are now available
         if family_df is not None and not family_df.empty:
             columns = list(family_df.columns)
+            vp_arg = None if vendor_hint == GENERIC_AUTO_DETECT else vendor_hint
+            vendor_suggestion = suggest_mapping_from_vendor_preset(columns, vp_arg)
+
+            confidence_icons = {"high": "green", "medium": "orange", "low": "red", "none": "red"}
+            color = confidence_icons.get(vendor_suggestion.confidence, "gray")
+            with st.container():
+                st.markdown(f"**Vendor Mapping Preview** — *confidence: :{color}[{vendor_suggestion.confidence}]*")
+                if vendor_suggestion.vendor:
+                    st.caption(f"Detected: **{vendor_suggestion.vendor}**")
+                else:
+                    st.caption("No vendor-specific pattern matched; using generic heuristics.")
+                if vendor_suggestion.notes:
+                    st.caption(vendor_suggestion.notes)
+                map_cols = st.columns(4)
+                map_cols[0].metric("Name column", vendor_suggestion.name_col or "(not detected)")
+                map_cols[1].metric("X column", vendor_suggestion.x_col or "(not detected)")
+                map_cols[2].metric("Y column", vendor_suggestion.y_col or "(not detected)")
+                map_cols[3].metric("Family column", vendor_suggestion.family_col or "(not detected)")
+
+        if family_df is not None and not family_df.empty:
             family_options = ["(none)"] + columns
-            default_name_index = next((idx for idx, col in enumerate(columns) if str(col).lower() in {"model", "curve", "curve_name", "model_name", "tag", "name"}), 0)
-            default_family_index = next((idx + 1 for idx, col in enumerate(columns) if "family" in str(col).lower() or "basis" in str(col).lower()), 0)
-            default_x_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["load", "suction", "capacity", "flow"])), 0)
-            default_y_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["steam", "consumption", "head", "duty", "ratio"]) and "pressure" not in str(col).lower()), min(1, len(columns) - 1))
+            # Derive default column indices from vendor preset suggestion when available
+            if vendor_suggestion and vendor_suggestion.confidence in ("high", "medium"):
+                name_index = columns.index(vendor_suggestion.name_col) if vendor_suggestion.name_col in columns else 0
+                x_index = columns.index(vendor_suggestion.x_col) if vendor_suggestion.x_col in columns else 0
+                y_index = columns.index(vendor_suggestion.y_col) if vendor_suggestion.y_col in columns else min(1, len(columns) - 1)
+                fam_index = columns.index(vendor_suggestion.family_col) + 1 if vendor_suggestion.family_col and vendor_suggestion.family_col in columns else 0
+            else:
+                # Fallback to generic heuristics
+                name_index = next((idx for idx, col in enumerate(columns) if str(col).lower() in {"model", "curve", "curve_name", "model_name", "tag", "name"}), 0)
+                x_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["load", "suction", "capacity", "flow"])), 0)
+                y_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["steam", "consumption", "head", "duty", "ratio"]) and "pressure" not in str(col).lower()), min(1, len(columns) - 1))
+                fam_index = next((idx + 1 for idx, col in enumerate(columns) if "family" in str(col).lower() or "basis" in str(col).lower()), 0)
             c1, c2, c3, c4 = st.columns(4)
-            curve_name_col = c1.selectbox("Curve/model name column", columns, index=default_name_index, key="sj_family_curve_name_col")
-            family_col = c2.selectbox("Family column", family_options, index=default_family_index, key="sj_family_family_col")
-            x_col = c3.selectbox("X column", columns, index=default_x_index, key="sj_family_x_col")
-            y_col = c4.selectbox("Y column", columns, index=default_y_index, key="sj_family_y_col")
+            curve_name_col = c1.selectbox("Curve/model name column", columns, index=name_index, key="sj_family_curve_name_col")
+            family_col = c2.selectbox("Family column", family_options, index=fam_index, key="sj_family_family_col")
+            x_col = c3.selectbox("X column", columns, index=x_index, key="sj_family_x_col")
+            y_col = c4.selectbox("Y column", columns, index=y_index, key="sj_family_y_col")
             family_label = None if family_col == "(none)" else family_col
             manual_library = build_curve_library_from_table(
                 family_df.to_dict(orient="records"),
@@ -3413,6 +3479,270 @@ def render_crystallizers() -> None:
 
 
 
+def render_heat_exchangers() -> None:
+    st.header("Heat Exchangers")
+    st.caption("LMTD screening, F-factor correction, and UA-based area sizing for shell-and-tube heat exchangers.  Use these results for quick plant checks — not for TEMA or mechanical design.")
+
+    tabs = st.tabs(["LMTD & Area Sizing", "LMTD Checker", "F-Factor Explorer", "Pass Arrangement Compare"])
+
+    with tabs[0]:
+        st.caption("Enter terminal temperatures, duty, and a screening U to estimate required heat exchanger area.")
+        c1, c2, c3, c4 = st.columns(4)
+        thot_in = c1.number_input("Hot-side inlet", value=95.0, key="hx_thot_in")
+        thot_out = c2.number_input("Hot-side outlet", value=45.0, key="hx_thot_out")
+        tcold_in = c3.number_input("Cold-side inlet", value=25.0, key="hx_tcold_in")
+        tcold_out = c4.number_input("Cold-side outlet", value=55.0, key="hx_tcold_out")
+        d1, d2 = st.columns(2)
+        duty_kw = d1.number_input("Heat duty (kW)", min_value=0.1, value=500.0, key="hx_duty")
+        assumed_u = d2.number_input("Assumed overall U (W/m²·K)", min_value=50.0, value=800.0, key="hx_u")
+        e1, e2, e3, e4, e5 = st.columns(5)
+        sp = int(e1.number_input("Shell passes", min_value=1, max_value=6, value=1, step=1, key="hx_sp"))
+        tp = int(e2.number_input("Tube passes", min_value=1, max_value=12, value=2, step=1, key="hx_tp"))
+        inst_area = e3.number_input("Installed area (m², optional)", min_value=0.0, value=0.0, key="hx_inst_area")
+        temp_unit = e4.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="hx_temp_unit")
+        area_unit = e5.selectbox("Area output unit", ("m²", "ft²"), index=0, key="hx_area_unit")
+
+        try:
+            t_hi = thot_in if temp_unit == "C" else (thot_in - 32.0) * 5.0 / 9.0
+            t_ho = thot_out if temp_unit == "C" else (thot_out - 32.0) * 5.0 / 9.0
+            t_ci = tcold_in if temp_unit == "C" else (tcold_in - 32.0) * 5.0 / 9.0
+            t_co = tcold_out if temp_unit == "C" else (tcold_out - 32.0) * 5.0 / 9.0
+            inst = inst_area if inst_area > 0 else None
+            sizing = size_heat_exchanger(t_hi, t_ho, t_ci, t_co, duty_kw, assumed_u, sp, tp, inst)
+            lmtd_c = sizing.lmtd_c
+            a_unit = area_unit
+            area_disp = sizing.required_area_m2 if a_unit == "m²" else sizing.required_area_m2 * 10.764
+            inst_disp = (inst if inst else 0.0) if a_unit == "m²" else (inst * 10.764 if inst else 0.0)
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("LMTD", f"{lmtd_c:.2f} °C")
+            m2.metric("F-factor", f"{sizing.f_factor:.4f}")
+            m3.metric("Corrected LMTD", f"{sizing.corrected_lmtd_c:.2f} °C")
+            m4.metric("Required area", f"{area_disp:.1f} {a_unit}")
+            if inst:
+                util = sizing.area_utilization_fraction
+                n1, n2 = st.columns(2)
+                n1.metric("Installed area", f"{inst_disp:.1f} {a_unit}")
+                n2.metric("Area utilization", f"{util*100:.1f}%" if util else "N/A")
+                if sizing.required_u_w_m2k > 0:
+                    st.metric(f"Required U if using all installed area", f"{sizing.required_u_w_m2k:,.0f} W/m²·K")
+            _show_notes(sizing.notes)
+            _remember_case("heat-exchangers-sizing", {
+                "thot_in": thot_in, "thot_out": thot_out,
+                "tcold_in": tcold_in, "tcold_out": tcold_out,
+                "duty_kw": duty_kw, "assumed_u": assumed_u,
+                "shell_passes": sp, "tube_passes": tp, "installed_area": inst_area,
+            }, {k: v for k, v in sizing.__dict__.items() if k != "notes"})
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[1]:
+        st.caption("Compute LMTD from any four terminal temperatures. Optionally compute the F-factor for a multi-pass arrangement.")
+        l1, l2, l3, l4 = st.columns(4)
+        lt_hi = l1.number_input("Hot inlet °C", value=95.0, key="lx_hi")
+        lt_ho = l2.number_input("Hot outlet °C", value=45.0, key="lx_ho")
+        lt_ci = l3.number_input("Cold inlet °C", value=25.0, key="lx_ci")
+        lt_co = l4.number_input("Cold outlet °C", value=55.0, key="lx_co")
+        l5, l6 = st.columns(2)
+        l_flow = l5.selectbox("Flow arrangement", ["counter", "co-current"], index=0, key="lx_flow")
+        l_sp = int(l6.number_input("Shell passes (0 = skip F-factor)", min_value=0, max_value=6, value=0, step=1, key="lx_sp"))
+
+        lmtd = calculate_lmtd(lt_hi, lt_ho, lt_ci, lt_co, l_flow)
+        col1, col2 = st.columns(2)
+        col1.metric("ΔT₁", f"{lmtd.dt1:.2f} °C")
+        col2.metric("ΔT₂", f"{lmtd.dt2:.2f} °C")
+        st.metric("LMTD", f"{lmtd.lmtd:.2f} °C")
+        if lmtd.cross_warn:
+            st.warning("Temperature cross — LMTD is undefined in this single-pass arrangement.")
+        if lmtd.approach_warn:
+            st.warning("Very small approach — expect large area requirement.")
+        _show_notes(lmtd.notes)
+
+        if l_sp > 0 and lmtd.lmtd > 0:
+            dt_max = lt_hi - lt_ci if lt_hi > lt_ci else lt_ci - lt_hi
+            if dt_max > 0 and abs(lt_co - lt_ci) > 1e-9:
+                p_val = (lt_co - lt_ci) / dt_max
+                r_val = (lt_hi - lt_ho) / (lt_co - lt_ci)
+                f = calculate_f_factor(p_val, r_val, l_sp, l_sp * 2)
+                st.metric("F-factor", f"{f.f_factor:.4f}")
+                st.metric("Corrected LMTD (F · LMTD)", f"{lmtd.lmtd * f.f_factor:.2f} °C")
+                if f.f_low_warn:
+                    st.warning("F-factor below 0.75 — this pass arrangement is not recommended; consider adding shell passes.")
+                f1, f2 = st.columns(2)
+                f1.metric("P (effectiveness)", f"{f.p:.4f}")
+                f2.metric("R (capacity ratio)", f"{f.r:.4f}")
+                _show_notes(f.notes)
+            else:
+                st.info("Cannot compute F-factor with current temperatures — check for zero temperature ranges.")
+
+        _remember_case("heat-exchangers-lmtd", {
+            "thot_in": lt_hi, "thot_out": lt_ho, "tcold_in": lt_ci, "tcold_out": lt_co,
+            "flow": l_flow, "shell_passes": l_sp,
+        }, {"lmtd": lmtd.lmtd, "dt1": lmtd.dt1, "dt2": lmtd.dt2, "cross_warn": lmtd.cross_warn})
+
+    with tabs[2]:
+        st.caption("Explore how F-factor changes with P (temperature effectiveness) and R (heat capacity ratio) for different pass arrangements.")
+        f1, f2, f3 = st.columns(3)
+        fp = f1.slider("P (0–1)", min_value=0.01, max_value=0.99, value=0.40, step=0.01, key="xf_p")
+        fr = f2.slider("R", min_value=0.1, max_value=5.0, value=1.5, step=0.1, key="xf_r")
+        fsp = int(f3.number_input("Shell passes", min_value=1, max_value=4, value=1, step=1, key="xf_sp"))
+
+        f_res = calculate_f_factor(fp, fr, fsp, fsp * 2)
+        st.metric(f"F-factor ({fsp}-{fsp*2})", f"{f_res.f_factor:.4f}")
+        if f_res.f_low_warn:
+            st.warning("F < 0.75 — this arrangement is generally not recommended.")
+        else:
+            st.success("F-factor is in the acceptable range.")
+        f1, f2 = st.columns(2)
+        f1.metric("P (effectiveness)", f"{f_res.p:.4f}")
+        f2.metric("R (capacity ratio)", f"{f_res.r:.4f}")
+        _show_notes(f_res.notes)
+
+    with tabs[3]:
+        st.caption("Compare 1-2, 2-4, and 3-6 pass arrangements for a given duty to see the trade-off in F-factor and area.")
+        p1, p2, p3, p4 = st.columns(4)
+        pt_hi = p1.number_input("Hot inlet", value=95.0, key="xp_hi")
+        pt_ho = p2.number_input("Hot outlet", value=45.0, key="xp_ho")
+        pt_ci = p3.number_input("Cold inlet", value=25.0, key="xp_ci")
+        pt_co = p4.number_input("Cold outlet", value=55.0, key="xp_co")
+        q1, q2 = st.columns(2)
+        q_duty = q1.number_input("Duty (kW)", min_value=0.1, value=500.0, key="xp_duty")
+        q_u = q2.number_input("U (W/m²·K)", min_value=50.0, value=800.0, key="xp_u")
+
+        try:
+            comparisons = compare_pass_arrangements(pt_hi, pt_ho, pt_ci, pt_co, q_duty, q_u)
+            rows = []
+            for c in comparisons:
+                rows.append({
+                    "Arrangement": f"{c.shell_passes}-{c.tube_passes}",
+                    "F-factor": f"{c.f_factor:.4f}",
+                    "Corrected LMTD (°C)": f"{c.corrected_lmtd_c:.2f}",
+                    "Required area (m²)": f"{c.required_area_m2:.1f}",
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            for c in comparisons:
+                with st.expander(f"{c.shell_passes}-{c.tube_passes} notes"):
+                    _show_notes(c.notes)
+        except ValueError as exc:
+            st.error(str(exc))
+
+
+def render_motors_drives() -> None:
+    st.header("Motors & Drives")
+    st.caption("Motor sizing, pump motor power screening, VFD savings estimates, and motor loading health checks.")
+
+    tabs = st.tabs(["Motor Sizing", "Pump Motor Power", "VFD Savings", "Motor Loading Check"])
+
+    with tabs[0]:
+        st.caption("Select a standard motor frame size from a shaft power requirement.")
+        m1, m2, m3, m4 = st.columns(4)
+        shaft_kw = m1.number_input("Shaft power (kW)", min_value=0.1, value=22.0, key="ms_shaft")
+        load_pct = m2.number_input("Expected load (%)", min_value=10.0, max_value=100.0, value=80.0, key="ms_load")
+        sf = m3.number_input("Service factor", min_value=1.0, max_value=1.5, value=1.15, step=0.05, key="ms_sf")
+        voltage = m4.number_input("Motor voltage (V, 3-phase)", min_value=200.0, value=480.0, step=10.0, key="ms_voltage")
+        s1, s2 = st.columns(2)
+        standard = s1.selectbox("Motor standard", ["IEC", "NEMA"], index=0, key="ms_standard")
+        std_lower = standard.lower()
+        try:
+            result = calculate_motor_size(shaft_kw, load_pct, sf, voltage, std_lower)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Recommended motor", f"{result.next_standard_motor_kw:.1f} kW ({result.next_standard_motor_kw/0.7457:.0f} HP)")
+            c2.metric("Motor loading", f"{result.loading_pct:.1f}%")
+            c3.metric("Electrical input", f"{result.electrical_input_kw:.1f} kW")
+            c4.metric("Estimated eff.", f"{result.motor_efficiency_pct:.1f}%")
+            e1, e2, e3 = st.columns(3)
+            e1.metric("Power factor", f"{result.pf:.3f}")
+            e2.metric("Apparent power", f"{result.apparent_power_kva:.1f} kVA")
+            e3.metric("FLA (3-phase)", f"{result.full_load_current_3ph:.1f} A")
+            _show_notes(result.notes)
+            _remember_case("motor-sizing", {
+                "shaft_kw": shaft_kw, "load_pct": load_pct,
+                "service_factor": sf, "voltage": voltage, "standard": standard,
+            }, {k: v for k, v in result.__dict__.items() if k != "notes"})
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[1]:
+        st.caption("Estimate motor power from pump flow, head, and efficiency.")
+        p1, p2, p3, p4 = st.columns(4)
+        flow = p1.number_input("Flow (m³/h)", min_value=0.01, value=50.0, key="pm_flow")
+        head = p2.number_input("Head (m)", min_value=0.1, value=30.0, key="pm_head")
+        sg = p3.number_input("Specific gravity", min_value=0.5, max_value=2.0, value=1.0, step=0.05, key="pm_sg")
+        pump_eff = p4.number_input("Pump efficiency (%)", min_value=30.0, max_value=95.0, value=75.0, key="pm_eff")
+        motor_eff_input = st.number_input("Motor efficiency (%) — leave 0 to auto-estimate", min_value=0.0, max_value=100.0, value=0.0, key="pm_motor_eff")
+        motor_eff_val = motor_eff_input if motor_eff_input > 0 else None
+        try:
+            result = calculate_pump_motor(flow, head, sg, pump_eff, motor_eff_val)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Hydraulic power", f"{result.hydraulic_kw:.1f} kW")
+            c2.metric("Shaft power", f"{result.shaft_power_kw:.1f} kW")
+            c3.metric("Electrical input", f"{result.electrical_input_kw:.1f} kW")
+            _show_notes(result.notes)
+            _remember_case("pump-motor", {"flow": flow, "head": head, "sg": sg, "pump_eff": pump_eff, "motor_eff": motor_eff_val}, {k: v for k, v in result.__dict__.items() if k != "notes"})
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[2]:
+        st.caption("Estimate kWh and cost savings when replacing throttle/bypass control with a VFD at reduced speed.")
+        v1, v2, v3, v4 = st.columns(4)
+        rated_kw = v1.number_input("Motor rated power (kW)", min_value=0.1, value=37.0, key="vfd_rated")
+        speed_pct = v2.number_input("Operating speed (%)", min_value=20.0, max_value=100.0, value=70.0, key="vfd_speed")
+        ctrl_method = v3.selectbox("Current control method", ["Throttle", "Bypass", "Generic"], index=0, key="vfd_ctrl")
+        annual_hrs = v4.number_input("Annual operating hours", min_value=100.0, max_value=8760.0, value=8000.0, key="vfd_hrs")
+        v5, v6 = st.columns(2)
+        elec_rate = v5.number_input("Electricity rate ($/kWh)", min_value=0.01, value=0.10, step=0.01, key="vfd_rate")
+        drive_eff = v6.number_input("Drive+motor combined efficiency", min_value=0.7, max_value=0.99, value=0.87, step=0.01, key="vfd_drive_eff")
+
+        try:
+            result = estimate_vfd_savings(
+                rated_kw, speed_pct, ctrl_method.lower().replace(" ", "_"), annual_hrs, elec_rate
+            )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("VFD input at speed", f"{result.estimated_vfd_input_kw:.1f} kW")
+            c2.metric(f"Current input ({result.current_control_method})", f"{result.current_input_kw:.1f} kW")
+            c3.metric("Savings", f"{result.estimated_savings_kw:.1f} kW")
+            c4.metric("Annual savings", f"{result.estimated_annual_savings_kwh:,.0f} kWh")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Annual cost savings", f"${result.estimated_annual_cost_savings:,.2f}")
+            if result.payback_months:
+                s2.metric("Est. payback", f"{result.payback_months:.1f} months")
+            else:
+                s2.metric("Est. payback", "N/A")
+            s3.metric("Speed", f"{result.rated_speed_pct:.0f}%")
+            _show_notes(result.notes)
+            _remember_case("vfd-savings", {"rated_kw": rated_kw, "speed_pct": speed_pct, "ctrl": ctrl_method, "annual_hrs": annual_hrs, "elec_rate": elec_rate}, {k: v for k, v in result.__dict__.items() if k != "notes"})
+        except ValueError as exc:
+            st.error(str(exc))
+
+    with tabs[3]:
+        st.caption("Quick motor loading health check from nameplate rating and measured electrical input.")
+        h1, h2, h3, h4 = st.columns(4)
+        motor_rated = h1.number_input("Motor nameplate (kW)", min_value=0.1, value=37.0, key="mh_rated")
+        measured = h2.number_input("Measured input (kW)", min_value=0.0, value=30.0, key="mh_measured")
+        mot_eff = h3.number_input("Motor efficiency (%)", min_value=50.0, max_value=99.0, value=90.0, key="mh_eff")
+        elec_rate = h4.number_input("Electricity rate ($/kWh)", min_value=0.01, value=0.10, step=0.01, key="mh_rate")
+        ahrs = st.number_input("Annual operating hours", min_value=100.0, max_value=8760.0, value=8000.0, key="mh_hrs")
+        try:
+            result = assess_motor_loading(motor_rated, measured, mot_eff, elec_rate, ahrs)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Motor nameplate", f"{result.motor_rated_kw:.1f} kW")
+            c2.metric("Measured input", f"{result.measured_input_kw:.1f} kW")
+            c3.metric("Est. shaft power", f"{result.estimated_shaft_kw:.1f} kW")
+            c4.metric("Loading", f"{result.load_factor_pct:.0f}%")
+            s1, s2, s3 = st.columns(3)
+            status = "OVERLOADED" if result.is_undersized else ("LIGHTLY LOADED" if result.is_oversized else "OK")
+            s1.metric("Status", status)
+            s2.metric("Annual energy", f"{result.estimated_annual_energy_kwh:,.0f} kWh")
+            s3.metric("Annual cost", f"${result.estimated_annual_cost:,.2f}")
+            if result.is_undersized:
+                st.error("Motor appears overloaded — check for overheating and insulation damage risk.")
+            elif result.is_oversized:
+                st.warning("Motor is lightly loaded — consider right-sizing or adding a VFD.")
+            _show_notes(result.notes)
+            _remember_case("motor-loading", {"rated": motor_rated, "measured": measured, "eff": mot_eff, "rate": elec_rate, "hrs": ahrs}, {k: v for k, v in result.__dict__.items() if k != "notes"})
+        except ValueError as exc:
+            st.error(str(exc))
+
+
 def render_workbook_import() -> None:
     st.header("Workbook Upload & Inspection")
     uploaded = st.file_uploader("Upload an Excel workbook", type=["xlsx", "xlsm"])
@@ -3510,11 +3840,13 @@ def render_roadmap() -> None:
         ("done", "Pump hydraulics BEP proximity and instrument-bias screening"),
         ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
         ("done", "Evaporators: body-by-body staging with per-effect U, area, flow direction, and sensible-heat balance"),
-        ("active", "Steam jets: vendor-specific workbook presets / mapping aids on top of the preview normalizer"),
+        ("done", "Steam jets: vendor presets with visible mapping preview, reference cards, and auto-seeded column selectors"),
     ])
 
     st.subheader("Next queued additions")
     _render_status_lines([
+        ("done", "Heat Exchangers: LMTD calculator with F-factor, UA screening, and pass arrangement comparison"),
+        ("done", "Motors & Drives: motor sizing, pump motor power, VFD savings, and loading health checks"),
         ("done", "Evaporators: multi-effect staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening"),
         ("done", "Evaporators: add fouling and NCG allowance screening for U-degradation and ΔT-penalty"),
         ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
@@ -3529,6 +3861,7 @@ def render_roadmap() -> None:
         ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
         ("done", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
         ("done", "Evaporators: body-by-body staging with per-effect U/area, feed preheat, forward/backward flow direction, sensible-heat tracking, and area utilization"),
+        ("done", "Steam jets: vendor presets with visible mapping preview, reference cards, and auto-seeded column selectors"),
     ])
 
     st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")
@@ -3540,10 +3873,12 @@ PAGES = {
     "Quick Tools": render_quick_tools,
     "Solution BPE": render_solution_bpe,
     "Hydraulics": render_hydraulics,
+    "Heat Exchangers": render_heat_exchangers,
     "Steam Jets": render_steam_jets,
     "Steam & Utilities": render_steam,
     "Evaporators": render_evaporators,
     "Crystallizers": render_crystallizers,
+    "Motors & Drives": render_motors_drives,
     "Workbook Import": render_workbook_import,
     "Case Manager": render_case_manager,
 }
