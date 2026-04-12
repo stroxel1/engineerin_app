@@ -1,0 +1,1396 @@
+{
+  "source": {
+    "path": "/Users/stephentroxel/Downloads/citric_bpe.xlsx",
+    "modified_time": 1775578550.168212,
+    "checksum": "fa7404ee774b4a25283f69e48706f03d3c9e1ef85a7a77197cb2b4ae10e15587"
+  },
+  "sheet_count": 5,
+  "sheets": [
+    {
+      "sheet_name": "Evap Calculator",
+      "dimensions": {
+        "max_row": 30,
+        "max_column": 21
+      },
+      "hidden": false,
+      "freeze_panes": null,
+      "merged_ranges": [
+        "A2:F3",
+        "A1:F1",
+        "A13:F15",
+        "R24:S24",
+        "H2:K2",
+        "N23:O23",
+        "N14:U20"
+      ],
+      "formula_cell_count": 6,
+      "header_candidates": [
+        [
+          "Use sheet",
+          "Citric BPR Table"
+        ],
+        [
+          "INPUTS",
+          "OUTPUTS",
+          "Best cited range",
+          "15 to 59.9 wt%"
+        ],
+        [
+          "Steam Pressure",
+          "150",
+          "psig",
+          "Steam Condensing Temp",
+          "=368+0.6*(B5-155)",
+          "\u00b0F",
+          "Beyond that",
+          "Use extrapolated values cautiously or plant back-calculation"
+        ]
+      ],
+      "stats": {
+        "sample_non_empty_row_count": 10,
+        "sample_populated_cell_count": 83,
+        "sample_numeric_cell_count": 11,
+        "sample_text_cell_count": 72,
+        "sample_numeric_fraction": 0.13253012048192772
+      },
+      "classification": "curve_table",
+      "sample_rows": [
+        [
+          "Evaporator Capacity vs Vacuum",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "Citric BPR helper",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "Use sheet",
+          "Citric BPR Table",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "INPUTS",
+          null,
+          null,
+          "OUTPUTS",
+          null,
+          null,
+          null,
+          "Best cited range",
+          "15 to 59.9 wt%",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Steam Pressure",
+          150,
+          "psig",
+          "Steam Condensing Temp",
+          "=368+0.6*(B5-155)",
+          "\u00b0F",
+          null,
+          "Beyond that",
+          "Use extrapolated values cautiously or plant back-calculation",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Current Vacuum",
+          18,
+          "inHg",
+          "Current Boiling Temp",
+          "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")",
+          "\u00b0F",
+          null,
+          "Source",
+          "https://www.cheresources.com/bpecalculator.pdf",
+          null,
+          null,
+          null,
+          "DS",
+          "BPE (\u00b0F)",
+          "Interpretation",
+          null,
+          null,
+          "DS (wt%)",
+          "Evaporator type",
+          "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)",
+          "Vendor quotes (typical)"
+        ],
+        [
+          "New Vacuum",
+          20,
+          "inHg",
+          "New Boiling Temp",
+          "=_xlfn.XLOOKUP(B7,References!A3:A31,References!B3:B31,\"\")",
+          "\u00b0F",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          30,
+          "~3.4",
+          "dilute / ideal",
+          null,
+          null,
+          "20\u201335",
+          "Falling film",
+          "450\u2013700",
+          "700\u2013900"
+        ],
+        [
+          "Current Evaporation Rate",
+          6000,
+          "lb/hr",
+          "New Evaporation Rate",
+          "=B8*((E5-E7)/(E5-E6))",
+          "lb/hr",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          40,
+          "~5.4",
+          "Perry ",
+          null,
+          null,
+          "35\u201350",
+          "Falling film",
+          "300\u2013450",
+          "600\u2013750"
+        ],
+        [
+          "Current BPR",
+          38,
+          "\u00b0F",
+          "Improvement",
+          "=E8/B8-1",
+          "%",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          50,
+          7.5,
+          "Perry ",
+          null,
+          null,
+          "50\u201360",
+          "Falling film",
+          "200\u2013300",
+          "500\u2013650"
+        ],
+        [
+          "New BPR",
+          38,
+          "\u00b0F",
+          "Corrected New Rate",
+          "=B8*((E5-(E7+B10))/(E5-(E6+B9)))*(B12/B11)",
+          "lb/hr",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          55,
+          "~18",
+          "rapid transition",
+          null,
+          null,
+          "60\u201370",
+          "Falling / forced",
+          "150\u2013250",
+          "450\u2013600 \u274c"
+        ]
+      ]
+    },
+    {
+      "sheet_name": "Design-Based Calc",
+      "dimensions": {
+        "max_row": 20,
+        "max_column": 12
+      },
+      "hidden": false,
+      "freeze_panes": null,
+      "merged_ranges": [
+        "A2:H2",
+        "A14:C14",
+        "A1:H1"
+      ],
+      "formula_cell_count": 8,
+      "header_candidates": [
+        [
+          "DESIGN BASIS",
+          "CASE INPUTS",
+          "RESULTS",
+          "Units",
+          "Scenario",
+          "Evaporation lb/hr"
+        ],
+        [
+          "Area",
+          "11790",
+          "ft\u00b2",
+          "Case Steam Temp",
+          "366",
+          "\u00b0F",
+          "Design \u0394T",
+          "=B8-(B9+B11)",
+          "\u00b0F",
+          "Design",
+          "=B6"
+        ],
+        [
+          "Design Evaporation",
+          "29684",
+          "lb/hr",
+          "Case Boiling Temp",
+          "180",
+          "\u00b0F",
+          "Case \u0394T",
+          "=E5-(E6+E9)",
+          "\u00b0F",
+          "Case",
+          "=H11"
+        ]
+      ],
+      "stats": {
+        "sample_non_empty_row_count": 9,
+        "sample_populated_cell_count": 65,
+        "sample_numeric_cell_count": 10,
+        "sample_text_cell_count": 54,
+        "sample_numeric_fraction": 0.15384615384615385
+      },
+      "classification": "curve_table",
+      "sample_rows": [
+        [
+          "Design-Calibrated Evaporator Capacity Calculator",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "Back-calculates design U from the evaporator design point and predicts capacity from actual steam and boiling temperatures. For concentrated citric liquor, actual boil temperature is more reliable than vacuum-only estimates.",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "DESIGN BASIS",
+          null,
+          null,
+          "CASE INPUTS",
+          null,
+          null,
+          "RESULTS",
+          null,
+          "Units",
+          null,
+          "Scenario",
+          "Evaporation lb/hr"
+        ],
+        [
+          "Area",
+          11790,
+          "ft\u00b2",
+          "Case Steam Temp",
+          366,
+          "\u00b0F",
+          "Design \u0394T",
+          "=B8-(B9+B11)",
+          "\u00b0F",
+          null,
+          "Design",
+          "=B6"
+        ],
+        [
+          "Design Evaporation",
+          29684,
+          "lb/hr",
+          "Case Boiling Temp",
+          180,
+          "\u00b0F",
+          "Case \u0394T",
+          "=E5-(E6+E9)",
+          "\u00b0F",
+          null,
+          "Case",
+          "=H11"
+        ],
+        [
+          "Design Steam Pressure",
+          150,
+          "psig",
+          "Case Steam Pressure",
+          150,
+          "psig",
+          "Design Latent Heat",
+          "=1093-0.556*(B9+B11)",
+          "Btu/lb",
+          null,
+          null,
+          null
+        ],
+        [
+          "Design Steam Temp",
+          366,
+          "\u00b0F",
+          "Case Vacuum",
+          " ",
+          "inHg",
+          "Case Latent Heat",
+          "=1093-0.556*(E6+E9)",
+          "Btu/lb",
+          null,
+          null,
+          null
+        ],
+        [
+          "Design Boiling Temp",
+          190,
+          "\u00b0F",
+          "Case BPR",
+          20.6,
+          "\u00b0F",
+          "Design U",
+          "=B6*H7/(B5*H5)",
+          "Btu/hr-ft\u00b2-\u00b0F",
+          null,
+          null,
+          null
+        ],
+        [
+          "Design Vacuum",
+          null,
+          "inHg",
+          "Current U Factor",
+          1,
+          "ratio",
+          "Effective Case U",
+          "=H9*(E11/E10)",
+          "Btu/hr-ft\u00b2-\u00b0F",
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "sheet_name": "References",
+      "dimensions": {
+        "max_row": 35,
+        "max_column": 6
+      },
+      "hidden": false,
+      "freeze_panes": null,
+      "merged_ranges": [
+        "A1:B1"
+      ],
+      "formula_cell_count": 0,
+      "header_candidates": [
+        [
+          "Reference Data Used in Calculator",
+          "Citric correction notes"
+        ],
+        [
+          "Vacuum (inHg)",
+          "Boiling Temp of Water (\u00b0F)",
+          "Use BPR to reflect solution boiling above pure water."
+        ],
+        [
+          "0",
+          "212",
+          "Typical high-solids service may also reduce U."
+        ]
+      ],
+      "stats": {
+        "sample_non_empty_row_count": 10,
+        "sample_populated_cell_count": 25,
+        "sample_numeric_cell_count": 16,
+        "sample_text_cell_count": 9,
+        "sample_numeric_fraction": 0.64
+      },
+      "classification": "bpe_table",
+      "sample_rows": [
+        [
+          "Reference Data Used in Calculator",
+          null,
+          null,
+          null,
+          null,
+          "Citric correction notes"
+        ],
+        [
+          "Vacuum (inHg)",
+          "Boiling Temp of Water (\u00b0F)",
+          null,
+          null,
+          null,
+          "Use BPR to reflect solution boiling above pure water."
+        ],
+        [
+          0,
+          212,
+          null,
+          null,
+          null,
+          "Typical high-solids service may also reduce U."
+        ],
+        [
+          1,
+          210,
+          null,
+          null,
+          null,
+          "Corrected New Rate = Water-only rate adjusted by BPR and U ratio."
+        ],
+        [
+          2,
+          209,
+          null,
+          null,
+          null,
+          "U Ratio = New U Factor / Current U Factor."
+        ],
+        [
+          3,
+          207,
+          null,
+          null,
+          null,
+          "Set both U factors to 1.00 if you only want BPR correction."
+        ],
+        [
+          4,
+          205,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          5,
+          203,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          6,
+          201,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          7,
+          199,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "sheet_name": "Citric BPR Table",
+      "dimensions": {
+        "max_row": 80,
+        "max_column": 12
+      },
+      "hidden": false,
+      "freeze_panes": null,
+      "merged_ranges": [
+        "A1:E1"
+      ],
+      "formula_cell_count": 2,
+      "header_candidates": [
+        [
+          "DS wt%",
+          "BPR start (\u00b0F)",
+          "BPR start (\u00b0C)",
+          "Use in calculator?",
+          "User override (\u00b0F)",
+          "Source URL",
+          "Selected DS",
+          "Table BPR (\u00b0F)",
+          "User BPR (\u00b0F)",
+          "Effective BPR (\u00b0F)",
+          "Notes"
+        ],
+        [
+          "15",
+          "0.6",
+          "0.33",
+          "Yes - starting estimate",
+          "https://www.cheresources.com/bpecalculator.pdf",
+          "60",
+          "=_xlfn.XLOOKUP(H7,A7:A72,B7:B72,\"\")",
+          "=IF(J7=\"\",I7,J7)",
+          "Pick DS in J7. Use Table BPR unless you have plant/lab data to override in L7."
+        ],
+        [
+          "16",
+          "0.81",
+          "0.45",
+          "Yes - starting estimate",
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ]
+      ],
+      "stats": {
+        "sample_non_empty_row_count": 6,
+        "sample_populated_cell_count": 36,
+        "sample_numeric_cell_count": 13,
+        "sample_text_cell_count": 23,
+        "sample_numeric_fraction": 0.3611111111111111
+      },
+      "classification": "curve_table",
+      "sample_rows": [
+        [
+          "Citric Acid BPR Reference / Starting Curve",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "DS wt%",
+          "BPR start (\u00b0F)",
+          "BPR start (\u00b0C)",
+          "Use in calculator?",
+          "User override (\u00b0F)",
+          "Source URL",
+          null,
+          "Selected DS",
+          "Table BPR (\u00b0F)",
+          "User BPR (\u00b0F)",
+          "Effective BPR (\u00b0F)",
+          "Notes"
+        ],
+        [
+          15,
+          0.6,
+          0.33,
+          "Yes - starting estimate",
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf",
+          null,
+          60,
+          "=_xlfn.XLOOKUP(H7,A7:A72,B7:B72,\"\")",
+          null,
+          "=IF(J7=\"\",I7,J7)",
+          "Pick DS in J7. Use Table BPR unless you have plant/lab data to override in L7."
+        ],
+        [
+          16,
+          0.81,
+          0.45,
+          "Yes - starting estimate",
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          17,
+          1.01,
+          0.56,
+          "Yes - starting estimate",
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          18,
+          1.22,
+          0.68,
+          "Yes - starting estimate",
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "sheet_name": "Plant BPR Backcalc",
+      "dimensions": {
+        "max_row": 40,
+        "max_column": 9
+      },
+      "hidden": false,
+      "freeze_panes": null,
+      "merged_ranges": [
+        "A1:F1"
+      ],
+      "formula_cell_count": 12,
+      "header_candidates": [
+        [
+          "DS wt%",
+          "Vacuum (inHg)",
+          "Measured liquor boil (\u00b0F)",
+          "Pure-water boil (\u00b0F)",
+          "Calculated BPR (\u00b0F)",
+          "Calculated BPR (\u00b0C)",
+          "URL"
+        ],
+        [
+          "=IF(B7=\"\",\"\",_xludf.XLOOKUP(B7,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C7=\"\",D7=\"\"),\"\",C7-D7)",
+          "=IF(E7=\"\",\"\",E7*5/9)",
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ],
+        [
+          "=IF(B8=\"\",\"\",_xludf.XLOOKUP(B8,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C8=\"\",D8=\"\"),\"\",C8-D8)",
+          "=IF(E8=\"\",\"\",E8*5/9)",
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ]
+      ],
+      "stats": {
+        "sample_non_empty_row_count": 6,
+        "sample_populated_cell_count": 24,
+        "sample_numeric_cell_count": 0,
+        "sample_text_cell_count": 24,
+        "sample_numeric_fraction": 0.0
+      },
+      "classification": "bpe_table",
+      "sample_rows": [
+        [
+          "Plant BPR Back-Calculation",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        [
+          "DS wt%",
+          "Vacuum (inHg)",
+          "Measured liquor boil (\u00b0F)",
+          "Pure-water boil (\u00b0F)",
+          "Calculated BPR (\u00b0F)",
+          "Calculated BPR (\u00b0C)",
+          null,
+          null,
+          "URL"
+        ],
+        [
+          null,
+          null,
+          null,
+          "=IF(B7=\"\",\"\",_xludf.XLOOKUP(B7,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C7=\"\",D7=\"\"),\"\",C7-D7)",
+          "=IF(E7=\"\",\"\",E7*5/9)",
+          null,
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ],
+        [
+          null,
+          null,
+          null,
+          "=IF(B8=\"\",\"\",_xludf.XLOOKUP(B8,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C8=\"\",D8=\"\"),\"\",C8-D8)",
+          "=IF(E8=\"\",\"\",E8*5/9)",
+          null,
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ],
+        [
+          null,
+          null,
+          null,
+          "=IF(B9=\"\",\"\",_xludf.XLOOKUP(B9,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C9=\"\",D9=\"\"),\"\",C9-D9)",
+          "=IF(E9=\"\",\"\",E9*5/9)",
+          null,
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ],
+        [
+          null,
+          null,
+          null,
+          "=IF(B10=\"\",\"\",_xludf.XLOOKUP(B10,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "=IF(OR(C10=\"\",D10=\"\"),\"\",C10-D10)",
+          "=IF(E10=\"\",\"\",E10*5/9)",
+          null,
+          null,
+          "https://www.cheresources.com/bpecalculator.pdf"
+        ]
+      ]
+    }
+  ],
+  "normalized_tables": [
+    {
+      "sheet_name": "Evap Calculator",
+      "classification": "curve_table",
+      "header": [
+        "Current Vacuum",
+        "18",
+        "inHg",
+        "Current Boiling Temp",
+        "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")",
+        "\u00b0F",
+        "column_7",
+        "Source",
+        "https://www.cheresources.com/bpecalculator.pdf",
+        "column_10",
+        "column_11",
+        "column_12",
+        "DS",
+        "BPE (\u00b0F)",
+        "Interpretation",
+        "column_16",
+        "column_17",
+        "DS (wt%)",
+        "Evaporator type",
+        "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)",
+        "Vendor quotes (typical)"
+      ],
+      "row_count": 4,
+      "rows": [
+        {
+          "Current Vacuum": "New Vacuum",
+          "18": 20,
+          "inHg": "inHg",
+          "Current Boiling Temp": "New Boiling Temp",
+          "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")": "=_xlfn.XLOOKUP(B7,References!A3:A31,References!B3:B31,\"\")",
+          "\u00b0F": "\u00b0F",
+          "column_7": null,
+          "Source": null,
+          "https://www.cheresources.com/bpecalculator.pdf": null,
+          "column_10": null,
+          "column_11": null,
+          "column_12": null,
+          "DS": 30,
+          "BPE (\u00b0F)": "~3.4",
+          "Interpretation": "dilute / ideal",
+          "column_16": null,
+          "column_17": null,
+          "DS (wt%)": "20\u201335",
+          "Evaporator type": "Falling film",
+          "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)": "450\u2013700",
+          "Vendor quotes (typical)": "700\u2013900"
+        },
+        {
+          "Current Vacuum": "Current Evaporation Rate",
+          "18": 6000,
+          "inHg": "lb/hr",
+          "Current Boiling Temp": "New Evaporation Rate",
+          "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")": "=B8*((E5-E7)/(E5-E6))",
+          "\u00b0F": "lb/hr",
+          "column_7": null,
+          "Source": null,
+          "https://www.cheresources.com/bpecalculator.pdf": null,
+          "column_10": null,
+          "column_11": null,
+          "column_12": null,
+          "DS": 40,
+          "BPE (\u00b0F)": "~5.4",
+          "Interpretation": "Perry ",
+          "column_16": null,
+          "column_17": null,
+          "DS (wt%)": "35\u201350",
+          "Evaporator type": "Falling film",
+          "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)": "300\u2013450",
+          "Vendor quotes (typical)": "600\u2013750"
+        },
+        {
+          "Current Vacuum": "Current BPR",
+          "18": 38,
+          "inHg": "\u00b0F",
+          "Current Boiling Temp": "Improvement",
+          "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")": "=E8/B8-1",
+          "\u00b0F": "%",
+          "column_7": null,
+          "Source": null,
+          "https://www.cheresources.com/bpecalculator.pdf": null,
+          "column_10": null,
+          "column_11": null,
+          "column_12": null,
+          "DS": 50,
+          "BPE (\u00b0F)": 7.5,
+          "Interpretation": "Perry ",
+          "column_16": null,
+          "column_17": null,
+          "DS (wt%)": "50\u201360",
+          "Evaporator type": "Falling film",
+          "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)": "200\u2013300",
+          "Vendor quotes (typical)": "500\u2013650"
+        },
+        {
+          "Current Vacuum": "New BPR",
+          "18": 38,
+          "inHg": "\u00b0F",
+          "Current Boiling Temp": "Corrected New Rate",
+          "=_xlfn.XLOOKUP(B6,References!A3:A31,References!B3:B31,\"\")": "=B8*((E5-(E7+B10))/(E5-(E6+B9)))*(B12/B11)",
+          "\u00b0F": "lb/hr",
+          "column_7": null,
+          "Source": null,
+          "https://www.cheresources.com/bpecalculator.pdf": null,
+          "column_10": null,
+          "column_11": null,
+          "column_12": null,
+          "DS": 55,
+          "BPE (\u00b0F)": "~18",
+          "Interpretation": "rapid transition",
+          "column_16": null,
+          "column_17": null,
+          "DS (wt%)": "60\u201370",
+          "Evaporator type": "Falling / forced",
+          "Realistic U (BTU/hr\u00b7ft\u00b2\u00b7\u00b0F)": "150\u2013250",
+          "Vendor quotes (typical)": "450\u2013600 \u274c"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "sheet_name": "Design-Based Calc",
+      "classification": "curve_table",
+      "header": [
+        "Area",
+        "11790",
+        "ft\u00b2",
+        "Case Steam Temp",
+        "366",
+        "\u00b0F",
+        "Design \u0394T",
+        "=B8-(B9+B11)",
+        "\u00b0F",
+        "column_10",
+        "Design",
+        "=B6"
+      ],
+      "row_count": 5,
+      "rows": [
+        {
+          "Area": "Design Evaporation",
+          "11790": 29684,
+          "ft\u00b2": "lb/hr",
+          "Case Steam Temp": "Case Boiling Temp",
+          "366": 180,
+          "\u00b0F": "\u00b0F",
+          "Design \u0394T": "Case \u0394T",
+          "=B8-(B9+B11)": "=E5-(E6+E9)",
+          "column_10": null,
+          "Design": "Case",
+          "=B6": "=H11"
+        },
+        {
+          "Area": "Design Steam Pressure",
+          "11790": 150,
+          "ft\u00b2": "psig",
+          "Case Steam Temp": "Case Steam Pressure",
+          "366": 150,
+          "\u00b0F": "Btu/lb",
+          "Design \u0394T": "Design Latent Heat",
+          "=B8-(B9+B11)": "=1093-0.556*(B9+B11)",
+          "column_10": null,
+          "Design": null,
+          "=B6": null
+        },
+        {
+          "Area": "Design Steam Temp",
+          "11790": 366,
+          "ft\u00b2": "\u00b0F",
+          "Case Steam Temp": "Case Vacuum",
+          "366": " ",
+          "\u00b0F": "Btu/lb",
+          "Design \u0394T": "Case Latent Heat",
+          "=B8-(B9+B11)": "=1093-0.556*(E6+E9)",
+          "column_10": null,
+          "Design": null,
+          "=B6": null
+        },
+        {
+          "Area": "Design Boiling Temp",
+          "11790": 190,
+          "ft\u00b2": "\u00b0F",
+          "Case Steam Temp": "Case BPR",
+          "366": 20.6,
+          "\u00b0F": "Btu/hr-ft\u00b2-\u00b0F",
+          "Design \u0394T": "Design U",
+          "=B8-(B9+B11)": "=B6*H7/(B5*H5)",
+          "column_10": null,
+          "Design": null,
+          "=B6": null
+        },
+        {
+          "Area": "Design Vacuum",
+          "11790": null,
+          "ft\u00b2": "inHg",
+          "Case Steam Temp": "Current U Factor",
+          "366": 1,
+          "\u00b0F": "Btu/hr-ft\u00b2-\u00b0F",
+          "Design \u0394T": "Effective Case U",
+          "=B8-(B9+B11)": "=H9*(E11/E10)",
+          "column_10": null,
+          "Design": null,
+          "=B6": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "sheet_name": "References",
+      "classification": "bpe_table",
+      "header": [
+        "Vacuum (inHg)",
+        "Boiling Temp of Water (\u00b0F)",
+        "column_3",
+        "column_4",
+        "column_5",
+        "Use BPR to reflect solution boiling above pure water."
+      ],
+      "row_count": 8,
+      "rows": [
+        {
+          "Vacuum (inHg)": 0,
+          "Boiling Temp of Water (\u00b0F)": 212,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": "Typical high-solids service may also reduce U."
+        },
+        {
+          "Vacuum (inHg)": 1,
+          "Boiling Temp of Water (\u00b0F)": 210,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": "Corrected New Rate = Water-only rate adjusted by BPR and U ratio."
+        },
+        {
+          "Vacuum (inHg)": 2,
+          "Boiling Temp of Water (\u00b0F)": 209,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": "U Ratio = New U Factor / Current U Factor."
+        },
+        {
+          "Vacuum (inHg)": 3,
+          "Boiling Temp of Water (\u00b0F)": 207,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": "Set both U factors to 1.00 if you only want BPR correction."
+        },
+        {
+          "Vacuum (inHg)": 4,
+          "Boiling Temp of Water (\u00b0F)": 205,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": null
+        },
+        {
+          "Vacuum (inHg)": 5,
+          "Boiling Temp of Water (\u00b0F)": 203,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": null
+        },
+        {
+          "Vacuum (inHg)": 6,
+          "Boiling Temp of Water (\u00b0F)": 201,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": null
+        },
+        {
+          "Vacuum (inHg)": 7,
+          "Boiling Temp of Water (\u00b0F)": 199,
+          "column_3": null,
+          "column_4": null,
+          "column_5": null,
+          "Use BPR to reflect solution boiling above pure water.": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "sheet_name": "Citric BPR Table",
+      "classification": "curve_table",
+      "header": [
+        "DS wt%",
+        "BPR start (\u00b0F)",
+        "BPR start (\u00b0C)",
+        "Use in calculator?",
+        "User override (\u00b0F)",
+        "Source URL",
+        "column_7",
+        "Selected DS",
+        "Table BPR (\u00b0F)",
+        "User BPR (\u00b0F)",
+        "Effective BPR (\u00b0F)",
+        "Notes"
+      ],
+      "row_count": 4,
+      "rows": [
+        {
+          "DS wt%": 15,
+          "BPR start (\u00b0F)": 0.6,
+          "BPR start (\u00b0C)": 0.33,
+          "Use in calculator?": "Yes - starting estimate",
+          "User override (\u00b0F)": null,
+          "Source URL": "https://www.cheresources.com/bpecalculator.pdf",
+          "column_7": null,
+          "Selected DS": 60,
+          "Table BPR (\u00b0F)": "=_xlfn.XLOOKUP(H7,A7:A72,B7:B72,\"\")",
+          "User BPR (\u00b0F)": null,
+          "Effective BPR (\u00b0F)": "=IF(J7=\"\",I7,J7)",
+          "Notes": "Pick DS in J7. Use Table BPR unless you have plant/lab data to override in L7."
+        },
+        {
+          "DS wt%": 16,
+          "BPR start (\u00b0F)": 0.81,
+          "BPR start (\u00b0C)": 0.45,
+          "Use in calculator?": "Yes - starting estimate",
+          "User override (\u00b0F)": null,
+          "Source URL": "https://www.cheresources.com/bpecalculator.pdf",
+          "column_7": null,
+          "Selected DS": null,
+          "Table BPR (\u00b0F)": null,
+          "User BPR (\u00b0F)": null,
+          "Effective BPR (\u00b0F)": null,
+          "Notes": null
+        },
+        {
+          "DS wt%": 17,
+          "BPR start (\u00b0F)": 1.01,
+          "BPR start (\u00b0C)": 0.56,
+          "Use in calculator?": "Yes - starting estimate",
+          "User override (\u00b0F)": null,
+          "Source URL": "https://www.cheresources.com/bpecalculator.pdf",
+          "column_7": null,
+          "Selected DS": null,
+          "Table BPR (\u00b0F)": null,
+          "User BPR (\u00b0F)": null,
+          "Effective BPR (\u00b0F)": null,
+          "Notes": null
+        },
+        {
+          "DS wt%": 18,
+          "BPR start (\u00b0F)": 1.22,
+          "BPR start (\u00b0C)": 0.68,
+          "Use in calculator?": "Yes - starting estimate",
+          "User override (\u00b0F)": null,
+          "Source URL": "https://www.cheresources.com/bpecalculator.pdf",
+          "column_7": null,
+          "Selected DS": null,
+          "Table BPR (\u00b0F)": null,
+          "User BPR (\u00b0F)": null,
+          "Effective BPR (\u00b0F)": null,
+          "Notes": null
+        }
+      ],
+      "notes": []
+    },
+    {
+      "sheet_name": "Plant BPR Backcalc",
+      "classification": "bpe_table",
+      "header": [
+        "DS wt%",
+        "Vacuum (inHg)",
+        "Measured liquor boil (\u00b0F)",
+        "Pure-water boil (\u00b0F)",
+        "Calculated BPR (\u00b0F)",
+        "Calculated BPR (\u00b0C)",
+        "column_7",
+        "column_8",
+        "URL"
+      ],
+      "row_count": 4,
+      "rows": [
+        {
+          "DS wt%": null,
+          "Vacuum (inHg)": null,
+          "Measured liquor boil (\u00b0F)": null,
+          "Pure-water boil (\u00b0F)": "=IF(B7=\"\",\"\",_xludf.XLOOKUP(B7,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "Calculated BPR (\u00b0F)": "=IF(OR(C7=\"\",D7=\"\"),\"\",C7-D7)",
+          "Calculated BPR (\u00b0C)": "=IF(E7=\"\",\"\",E7*5/9)",
+          "column_7": null,
+          "column_8": null,
+          "URL": "https://www.cheresources.com/bpecalculator.pdf"
+        },
+        {
+          "DS wt%": null,
+          "Vacuum (inHg)": null,
+          "Measured liquor boil (\u00b0F)": null,
+          "Pure-water boil (\u00b0F)": "=IF(B8=\"\",\"\",_xludf.XLOOKUP(B8,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "Calculated BPR (\u00b0F)": "=IF(OR(C8=\"\",D8=\"\"),\"\",C8-D8)",
+          "Calculated BPR (\u00b0C)": "=IF(E8=\"\",\"\",E8*5/9)",
+          "column_7": null,
+          "column_8": null,
+          "URL": "https://www.cheresources.com/bpecalculator.pdf"
+        },
+        {
+          "DS wt%": null,
+          "Vacuum (inHg)": null,
+          "Measured liquor boil (\u00b0F)": null,
+          "Pure-water boil (\u00b0F)": "=IF(B9=\"\",\"\",_xludf.XLOOKUP(B9,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "Calculated BPR (\u00b0F)": "=IF(OR(C9=\"\",D9=\"\"),\"\",C9-D9)",
+          "Calculated BPR (\u00b0C)": "=IF(E9=\"\",\"\",E9*5/9)",
+          "column_7": null,
+          "column_8": null,
+          "URL": "https://www.cheresources.com/bpecalculator.pdf"
+        },
+        {
+          "DS wt%": null,
+          "Vacuum (inHg)": null,
+          "Measured liquor boil (\u00b0F)": null,
+          "Pure-water boil (\u00b0F)": "=IF(B10=\"\",\"\",_xludf.XLOOKUP(B10,References!$A$8:$A$36,References!$B$8:$B$36,\"\"))",
+          "Calculated BPR (\u00b0F)": "=IF(OR(C10=\"\",D10=\"\"),\"\",C10-D10)",
+          "Calculated BPR (\u00b0C)": "=IF(E10=\"\",\"\",E10*5/9)",
+          "column_7": null,
+          "column_8": null,
+          "URL": "https://www.cheresources.com/bpecalculator.pdf"
+        }
+      ],
+      "notes": []
+    }
+  ]
+}
