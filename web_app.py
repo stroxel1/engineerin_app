@@ -16,6 +16,8 @@ from engineering_app.core.crystallizers import (
     CrystallizerInputs,
     estimate_citric_solubility_wt_pct,
     estimate_crystallizer,
+    estimate_multi_body_crystallizer,
+    MultiBodyCrystallizerInputs,
 )
 from engineering_app.core.curves import (
     build_curve_library_from_table,
@@ -2939,149 +2941,278 @@ def render_evaporators() -> None:
 def render_crystallizers() -> None:
     st.header("Crystallizers")
     st.caption("For citric acid, slurry can now be based on crystal volume percent while mother liquor is auto-set from temperature-dependent solubility and screened for supersaturation / metastable-band risk.")
-    c0, c1, c2, c3 = st.columns(4)
-    product = c0.selectbox("Product", ["citric_acid", "generic"], format_func=lambda value: "Citric acid" if value == "citric_acid" else "Generic liquor", key="cr_product")
-    feed_rate = c1.number_input("Feed rate", value=12000.0, key="cr_feed_rate")
-    feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="cr_feed_rate_unit")
-    feed_solids = c3.number_input("Feed solids (wt%)", value=55.0, key="cr_feed_solids")
+    tabs = st.tabs(["Single-body screen", "Multi-body train"])
 
-    c4, c5, c6, c7 = st.columns(4)
-    basis_mode = c4.radio("Slurry basis", ["Crystal vol%", "Crystal wt%"], horizontal=True, key="cr_basis_mode")
-    operating_temp = c5.number_input("Operating temperature", value=45.0, key="cr_temp")
-    operating_temp_unit = c6.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
-    circulation = c7.number_input("Circulation rate", value=72000.0, key="cr_circulation")
+    with tabs[0]:
+        c0, c1, c2, c3 = st.columns(4)
+        product = c0.selectbox("Product", ["citric_acid", "generic"], format_func=lambda value: "Citric acid" if value == "citric_acid" else "Generic liquor", key="cr_product")
+        feed_rate = c1.number_input("Feed rate", value=12000.0, key="cr_feed_rate")
+        feed_rate_unit = c2.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="cr_feed_rate_unit")
+        feed_solids = c3.number_input("Feed solids (wt%)", value=55.0, key="cr_feed_solids")
 
-    c8, c9, c10, c11 = st.columns(4)
-    circulation_unit = c8.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
-    slurry_withdrawal = c9.number_input("Slurry withdrawal rate", min_value=0.0, value=12000.0, key="cr_slurry_withdrawal")
-    slurry_withdrawal_unit = c10.selectbox("Slurry withdrawal unit", MASS_FLOW_UNITS, index=0, key="cr_slurry_withdrawal_unit")
-    output_flow_unit = c11.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
+        c4, c5, c6, c7 = st.columns(4)
+        basis_mode = c4.radio("Slurry basis", ["Crystal vol%", "Crystal wt%"], horizontal=True, key="cr_basis_mode")
+        operating_temp = c5.number_input("Operating temperature", value=45.0, key="cr_temp")
+        operating_temp_unit = c6.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
+        circulation = c7.number_input("Circulation rate", value=72000.0, key="cr_circulation")
 
-    c12, c13 = st.columns(2)
-    working_volume = c12.number_input("Working volume", value=18.0, key="cr_working_volume")
-    working_volume_unit = c13.selectbox("Working volume unit", VOLUME_UNITS, index=0, key="cr_working_volume_unit")
+        c8, c9, c10, c11 = st.columns(4)
+        circulation_unit = c8.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
+        slurry_withdrawal = c9.number_input("Slurry withdrawal rate", min_value=0.0, value=12000.0, key="cr_slurry_withdrawal")
+        slurry_withdrawal_unit = c10.selectbox("Slurry withdrawal unit", MASS_FLOW_UNITS, index=0, key="cr_slurry_withdrawal_unit")
+        output_flow_unit = c11.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
 
-    temp_c = operating_temp if operating_temp_unit == "C" else (operating_temp - 32.0) * 5.0 / 9.0
-    auto_mother_liquor_solids = estimate_citric_solubility_wt_pct(temp_c) if product == "citric_acid" else None
+        c12, c13 = st.columns(2)
+        working_volume = c12.number_input("Working volume", value=18.0, key="cr_working_volume")
+        working_volume_unit = c13.selectbox("Working volume unit", VOLUME_UNITS, index=0, key="cr_working_volume_unit")
 
-    d1, d2, d3, d4 = st.columns(4)
-    if basis_mode == "Crystal vol%":
-        target_crystal_volume_pct = d1.number_input("Target crystals in slurry (vol%)", value=18.0, key="cr_target_vol_pct")
-        slurry_solids = d2.number_input("Displayed slurry crystals (wt%)", value=25.0, key="cr_slurry_solids_display")
-    else:
-        slurry_solids = d1.number_input("Target slurry crystals (wt%)", value=25.0, key="cr_slurry_solids")
-        target_crystal_volume_pct = None
-        d2.caption("Weight-percent basis keeps the older quick-screen approach.")
-    mother_liquor_solids = d3.number_input(
-        "Mother liquor solids (wt%)",
-        value=auto_mother_liquor_solids if auto_mother_liquor_solids is not None else 45.0,
-        key="cr_mother_solids",
-        disabled=product == "citric_acid",
-    )
-    yield_unit = d4.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
+        temp_c = operating_temp if operating_temp_unit == "C" else (operating_temp - 32.0) * 5.0 / 9.0
+        auto_mother_liquor_solids = estimate_citric_solubility_wt_pct(temp_c) if product == "citric_acid" else None
 
-    e1, e2 = st.columns(2)
-    crystal_density = e1.number_input("Crystal density (kg/m3)", value=1660.0, key="cr_crystal_density")
-    mother_liquor_density = e2.number_input("Mother liquor density (kg/m3)", value=1280.0, key="cr_ml_density")
-
-    f1, f2 = st.columns(2)
-    supersat_screen_band_pct = f1.number_input(
-        "Controllable supersaturation band upper limit (%)",
-        min_value=0.0,
-        value=10.0,
-        step=1.0,
-        key="cr_supersat_band_pct",
-        help="User-entered screening band for relative supersaturation = (feed solids - equilibrium solids) / equilibrium solids.",
-    )
-    supersat_high_warning_pct = f2.number_input(
-        "High supersaturation warning limit (%)",
-        min_value=supersat_screen_band_pct,
-        value=max(supersat_screen_band_pct + 10.0, 20.0),
-        step=1.0,
-        key="cr_supersat_high_pct",
-        help="Above this relative supersaturation band, expect a stronger fines / spontaneous nucleation tendency unless the crystallizer and classification loop are robust.",
-    )
-
-    result = estimate_crystallizer(
-        CrystallizerInputs(
-            feed_rate_value=feed_rate,
-            feed_rate_unit=feed_rate_unit,
-            feed_solids_wt_pct=feed_solids,
-            mother_liquor_solids_wt_pct=mother_liquor_solids,
-            target_slurry_solids_wt_pct=slurry_solids,
-            circulation_rate_value=circulation,
-            circulation_rate_unit=circulation_unit,
-            working_volume_value=working_volume,
-            working_volume_unit=working_volume_unit,
-            operating_temperature_c=temp_c,
-            product=product,
-            crystal_density_kg_m3=crystal_density,
-            mother_liquor_density_kg_m3=mother_liquor_density,
-            target_crystal_volume_pct=target_crystal_volume_pct,
-            slurry_withdrawal_rate_value=slurry_withdrawal,
-            slurry_withdrawal_rate_unit=slurry_withdrawal_unit,
-            supersaturation_screen_band_relative=supersat_screen_band_pct / 100.0,
-            supersaturation_high_warning_relative=supersat_high_warning_pct / 100.0,
+        d1, d2, d3, d4 = st.columns(4)
+        if basis_mode == "Crystal vol%":
+            target_crystal_volume_pct = d1.number_input("Target crystals in slurry (vol%)", value=18.0, key="cr_target_vol_pct")
+            slurry_solids = d2.number_input("Displayed slurry crystals (wt%)", value=25.0, key="cr_slurry_solids_display")
+        else:
+            slurry_solids = d1.number_input("Target slurry crystals (wt%)", value=25.0, key="cr_slurry_solids")
+            target_crystal_volume_pct = None
+            d2.caption("Weight-percent basis keeps the older quick-screen approach.")
+        mother_liquor_solids = d3.number_input(
+            "Mother liquor solids (wt%)",
+            value=auto_mother_liquor_solids if auto_mother_liquor_solids is not None else 45.0,
+            key="cr_mother_solids",
+            disabled=product == "citric_acid",
         )
-    )
+        yield_unit = d4.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
 
-    if product == "citric_acid":
-        st.caption(f"Auto mother-liquor basis from published citric-acid water solubility data: {result.mother_liquor_solids_wt_pct:,.2f} wt% at {temp_c:,.1f} °C.")
+        e1, e2 = st.columns(2)
+        crystal_density = e1.number_input("Crystal density (kg/m3)", value=1660.0, key="cr_crystal_density")
+        mother_liquor_density = e2.number_input("Mother liquor density (kg/m3)", value=1280.0, key="cr_ml_density")
 
-    residence_unit = st.selectbox("Residence-time output unit", TIME_UNITS, index=2, key="cr_time_out")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Crystals", f"{kg_h_to_mass_flow(result.crystals_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    m2.metric("Mother liquor", f"{kg_h_to_mass_flow(result.mother_liquor_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    m3.metric("Crystal mass % in slurry", f"{result.slurry_crystal_mass_fraction * 100.0:,.2f} wt%")
-    if result.slurry_crystal_volume_fraction is not None:
-        m4.metric("Crystal volume % in slurry", f"{result.slurry_crystal_volume_fraction * 100.0:,.2f} vol%")
-    elif result.residence_time_h is not None:
-        residence_s = result.residence_time_h * 3600.0
-        m4.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
+        f1, f2 = st.columns(2)
+        supersat_screen_band_pct = f1.number_input(
+            "Controllable supersaturation band upper limit (%)",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+            key="cr_supersat_band_pct",
+            help="User-entered screening band for relative supersaturation = (feed solids - equilibrium solids) / equilibrium solids.",
+        )
+        supersat_high_warning_pct = f2.number_input(
+            "High supersaturation warning limit (%)",
+            min_value=supersat_screen_band_pct,
+            value=max(supersat_screen_band_pct + 10.0, 20.0),
+            step=1.0,
+            key="cr_supersat_high_pct",
+            help="Above this relative supersaturation band, expect a stronger fines / spontaneous nucleation tendency unless the crystallizer and classification loop are robust.",
+        )
 
-    n1, n2, n3, n4 = st.columns(4)
-    if result.residence_time_h is not None:
-        residence_s = result.residence_time_h * 3600.0
-        n1.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
-    n2.metric("Slurry withdrawal", f"{kg_h_to_mass_flow(result.slurry_withdrawal_rate_kg_h if result.slurry_withdrawal_rate_kg_h is not None else result.estimated_slurry_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    n3.metric("Circulation ratio", f"{result.circulation_ratio:,.2f}")
-    n4.metric("Yield", f"{_display_percent(result.yield_fraction_of_feed_solids, yield_unit):,.2f} {yield_unit}")
+        result = estimate_crystallizer(
+            CrystallizerInputs(
+                feed_rate_value=feed_rate,
+                feed_rate_unit=feed_rate_unit,
+                feed_solids_wt_pct=feed_solids,
+                mother_liquor_solids_wt_pct=mother_liquor_solids,
+                target_slurry_solids_wt_pct=slurry_solids,
+                circulation_rate_value=circulation,
+                circulation_rate_unit=circulation_unit,
+                working_volume_value=working_volume,
+                working_volume_unit=working_volume_unit,
+                operating_temperature_c=temp_c,
+                product=product,
+                crystal_density_kg_m3=crystal_density,
+                mother_liquor_density_kg_m3=mother_liquor_density,
+                target_crystal_volume_pct=target_crystal_volume_pct,
+                slurry_withdrawal_rate_value=slurry_withdrawal,
+                slurry_withdrawal_rate_unit=slurry_withdrawal_unit,
+                supersaturation_screen_band_relative=supersat_screen_band_pct / 100.0,
+                supersaturation_high_warning_relative=supersat_high_warning_pct / 100.0,
+            )
+        )
 
-    st.subheader("Supersaturation screen")
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Equilibrium mother liquor", f"{result.equilibrium_solids_wt_pct:,.2f} wt%")
-    s2.metric("Absolute supersaturation", f"{result.absolute_supersaturation_wt_pct:,.2f} wt%")
-    s3.metric("Relative supersaturation", f"{result.relative_supersaturation * 100.0:,.1f} %")
-    s4.metric("Supersaturation ratio", f"{result.supersaturation_ratio:,.3f}")
-    t1, t2 = st.columns(2)
-    t1.metric("Solids above equilibrium", f"{kg_h_to_mass_flow(result.solids_above_equilibrium_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
-    t2.metric("Supersaturation zone", result.supersaturation_zone)
-    st.caption(
-        f"Screening bands: controllable <= {supersat_screen_band_pct:,.1f}% relative supersaturation; high-warning > {supersat_high_warning_pct:,.1f}% relative supersaturation."
-    )
-    _show_notes(result.notes)
-    _remember_case("crystallizers", {
-        "product": product,
-        "feed_rate": feed_rate,
-        "feed_rate_unit": feed_rate_unit,
-        "feed_solids": feed_solids,
-        "operating_temp": operating_temp,
-        "operating_temp_unit": operating_temp_unit,
-        "basis_mode": basis_mode,
-        "target_crystal_volume_pct": target_crystal_volume_pct,
-        "target_slurry_solids_wt_pct": slurry_solids,
-        "mother_liquor_solids_wt_pct": mother_liquor_solids,
-        "circulation": circulation,
-        "circulation_unit": circulation_unit,
-        "slurry_withdrawal": slurry_withdrawal,
-        "slurry_withdrawal_unit": slurry_withdrawal_unit,
-        "working_volume": working_volume,
-        "working_volume_unit": working_volume_unit,
-        "crystal_density_kg_m3": crystal_density,
-        "mother_liquor_density_kg_m3": mother_liquor_density,
-        "supersaturation_screen_band_pct": supersat_screen_band_pct,
-        "supersaturation_high_warning_pct": supersat_high_warning_pct,
-    }, asdict(result))
+        if product == "citric_acid":
+            st.caption(f"Auto mother-liquor basis from published citric-acid water solubility data: {result.mother_liquor_solids_wt_pct:,.2f} wt% at {temp_c:,.1f} °C.")
+
+        residence_unit = st.selectbox("Residence-time output unit", TIME_UNITS, index=2, key="cr_time_out")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Crystals", f"{kg_h_to_mass_flow(result.crystals_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m2.metric("Mother liquor", f"{kg_h_to_mass_flow(result.mother_liquor_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        m3.metric("Crystal mass % in slurry", f"{result.slurry_crystal_mass_fraction * 100.0:,.2f} wt%")
+        if result.slurry_crystal_volume_fraction is not None:
+            m4.metric("Crystal volume % in slurry", f"{result.slurry_crystal_volume_fraction * 100.0:,.2f} vol%")
+        elif result.residence_time_h is not None:
+            residence_s = result.residence_time_h * 3600.0
+            m4.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
+
+        n1, n2, n3, n4 = st.columns(4)
+        if result.residence_time_h is not None:
+            residence_s = result.residence_time_h * 3600.0
+            n1.metric("Residence time", f"{seconds_to_time(residence_s, residence_unit):,.2f} {residence_unit}")
+        n2.metric("Slurry withdrawal", f"{kg_h_to_mass_flow(result.slurry_withdrawal_rate_kg_h if result.slurry_withdrawal_rate_kg_h is not None else result.estimated_slurry_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        n3.metric("Circulation ratio", f"{result.circulation_ratio:,.2f}")
+        n4.metric("Yield", f"{_display_percent(result.yield_fraction_of_feed_solids, yield_unit):,.2f} {yield_unit}")
+
+        st.subheader("Supersaturation screen")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Equilibrium mother liquor", f"{result.equilibrium_solids_wt_pct:,.2f} wt%")
+        s2.metric("Absolute supersaturation", f"{result.absolute_supersaturation_wt_pct:,.2f} wt%")
+        s3.metric("Relative supersaturation", f"{result.relative_supersaturation * 100.0:,.1f} %")
+        s4.metric("Supersaturation ratio", f"{result.supersaturation_ratio:,.3f}")
+        t1, t2 = st.columns(2)
+        t1.metric("Solids above equilibrium", f"{kg_h_to_mass_flow(result.solids_above_equilibrium_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
+        t2.metric("Supersaturation zone", result.supersaturation_zone)
+        st.caption(
+            f"Screening bands: controllable <= {supersat_screen_band_pct:,.1f}% relative supersaturation; high-warning > {supersat_high_warning_pct:,.1f}% relative supersaturation."
+        )
+        _show_notes(result.notes)
+        _remember_case("crystallizers", {
+            "product": product,
+            "feed_rate": feed_rate,
+            "feed_rate_unit": feed_rate_unit,
+            "feed_solids": feed_solids,
+            "operating_temp": operating_temp,
+            "operating_temp_unit": operating_temp_unit,
+            "basis_mode": basis_mode,
+            "target_crystal_volume_pct": target_crystal_volume_pct,
+            "target_slurry_solids_wt_pct": slurry_solids,
+            "mother_liquor_solids_wt_pct": mother_liquor_solids,
+            "circulation": circulation,
+            "circulation_unit": circulation_unit,
+            "slurry_withdrawal": slurry_withdrawal,
+            "slurry_withdrawal_unit": slurry_withdrawal_unit,
+            "working_volume": working_volume,
+            "working_volume_unit": working_volume_unit,
+            "crystal_density_kg_m3": crystal_density,
+            "mother_liquor_density_kg_m3": mother_liquor_density,
+            "supersaturation_screen_band_pct": supersat_screen_band_pct,
+            "supersaturation_high_warning_pct": supersat_high_warning_pct,
+        }, asdict(result))
+
+    with tabs[1]:
+        st.caption("Screen a multi-body cooling crystallizer train for citric acid. Liquor flows forward through bodies at progressively lower temperatures, and solids precipitate when concentration exceeds the equilibrium solubility at each body's operating temperature.")
+        mb0, mb1 = st.columns(2)
+        mb_feed_rate = mb0.number_input("Feed rate", value=12000.0, key="mb_cr_feed_rate")
+        mb_feed_rate_unit = mb1.selectbox("Feed rate unit", MASS_FLOW_UNITS, index=0, key="mb_cr_feed_rate_unit")
+        mb_feed_solids = mb0.number_input("Feed solids (wt%)", value=55.0, key="mb_cr_feed_solids")
+        mb_n_bodies = mb1.number_input("Number of bodies", min_value=2, max_value=6, value=3, step=1, key="mb_cr_n_bodies")
+
+        mb_temps_label = st.caption("Set body temperatures (decreasing from first to last body for a cooling crystallizer):")
+        temp_cols = st.columns(min(mb_n_bodies, 6))
+        default_temps = [80.0, 60.0, 45.0, 35.0, 25.0, 20.0]
+        mb_body_temps = []
+        for i in range(int(mb_n_bodies)):
+            mb_body_temps.append(temp_cols[i].number_input(f"Body {i+1} temp (°C)", value=default_temps[i], key=f"mb_cr_body_temp_{i}"))
+
+        mb_vol_c1, mb_vol_c2 = st.columns(2)
+        mb_working_volume = mb_vol_c1.number_input("Working volume per body (m3)", value=18.0, key="mb_cr_working_vol")
+        mb_output_flow_unit = mb_vol_c2.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="mb_cr_flow_out")
+
+        mb_crystal_density = st.number_input("Crystal density (kg/m3)", value=1660.0, key="mb_cr_crystal_density")
+        mb_ml_density = st.number_input("Mother liquor density (kg/m3)", value=1280.0, key="mb_cr_ml_density")
+
+        mb_sec = st.checkbox("Include secondary feed points", value=False, help="Allow additional feed inlets at intermediate bodies.", key="mb_cr_sec_feed")
+        if mb_sec:
+            st.caption("Enter secondary feed rates for each body (enter 0.0 for bodies without secondary feed):")
+            sec_rate_cols = st.columns(int(mb_n_bodies))
+            mb_sec_rates = []
+            for i in range(int(mb_n_bodies)):
+                mb_sec_rates.append(sec_rate_cols[i].number_input(f"Body {i+1} sec feed rate", value=0.0, key=f"mb_cr_sec_rate_{i}"))
+
+            st.caption("Secondary feed solids (wt%) per body:")
+            sec_solids_cols = st.columns(int(mb_n_bodies))
+            mb_sec_solids = []
+            for i in range(int(mb_n_bodies)):
+                mb_sec_solids.append(sec_solids_cols[i].number_input(f"Body {i+1} sec feed solids", value=mb_feed_solids, key=f"mb_cr_sec_solids_{i}"))
+        else:
+            mb_sec_rates = None
+            mb_sec_solids = None
+
+        try:
+            mb_inputs = MultiBodyCrystallizerInputs(
+                feed_rate_value=mb_feed_rate,
+                feed_rate_unit=mb_feed_rate_unit,
+                feed_solids_wt_pct=mb_feed_solids,
+                n_bodies=int(mb_n_bodies),
+                body_temperatures_c=mb_body_temps,
+                working_volume_per_body_m3=mb_working_volume,
+                crystal_density_kg_m3=mb_crystal_density,
+                mother_liquor_density_kg_m3=mb_ml_density,
+                include_secondary_feed_points=mb_sec,
+                secondary_feed_rates_value=mb_sec_rates if mb_sec and mb_sec_rates else None,
+                secondary_feed_solids_wt_pct=mb_sec_solids if mb_sec and mb_sec_solids else None,
+            )
+            mb_result = estimate_multi_body_crystallizer(mb_inputs, product="citric_acid")
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Bodies in train", str(mb_result.n_bodies))
+            m2.metric("Total crystals", f"{kg_h_to_mass_flow(mb_result.total_crystals_kg_h, mb_output_flow_unit):,.1f} {mb_output_flow_unit}")
+            m3.metric("Final mother liquor", f"{kg_h_to_mass_flow(mb_result.final_mother_liquor_kg_h, mb_output_flow_unit):,.1f} {mb_output_flow_unit}")
+            m4.metric("Overall yield", f"{mb_result.overall_yield_fraction * 100.0:.1f}%")
+
+            if mb_result.total_residence_time_h is not None:
+                st.metric("Total residence time", f"{mb_result.total_residence_time_h:.2f} h")
+            st.metric("Total working volume", f"{mb_result.total_working_volume_m3:.1f} m3")
+
+            st.subheader("Body-by-body profile")
+            body_df = pd.DataFrame([
+                {
+                    "Body": b.body_number,
+                    "Temp (°C)": b.temperature_c,
+                    "Equilibrium solubility (wt%)": b.equilibrium_solids_wt_pct,
+                    "Liquor in (kg/h)": b.liquor_rate_in_kg_h,
+                    "Liquor in solids (wt%)": b.liquor_solids_in_wt_pct,
+                    "Crystals produced (kg/h)": b.crystals_produced_kg_h,
+                    "Cumulative crystals (kg/h)": b.cumulative_crystals_kg_h,
+                    "Residence (h)": b.residence_time_h or "—"
+                }
+                for b in mb_result.bodies
+            ])
+            st.dataframe(body_df, use_container_width=True)
+
+            # Temperature profile plot
+            body_nums = [b.body_number for b in mb_result.bodies]
+            eq_solids = [b.equilibrium_solids_wt_pct for b in mb_result.bodies]
+            liquor_in_solids = [b.liquor_solids_in_wt_pct for b in mb_result.bodies]
+            temperatures = [b.temperature_c for b in mb_result.bodies]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=body_nums, y=temperatures, mode="lines+markers", name="Body temp (°C)"))
+            fig.add_trace(go.Scatter(x=body_nums, y=eq_solids, mode="lines+markers", name="Eq. solubility (wt%)"))
+            fig.add_trace(go.Scatter(x=body_nums, y=liquor_in_solids, mode="lines+markers", name="Liquor in solids (wt%)"))
+            fig.update_layout(
+                title="Multi-body crystallizer temperature and solubility profile",
+                xaxis_title="Body number",
+                xaxis=dict(tickmode="linear", dtick=1),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Cumulative crystals bar chart
+            crystals = [b.crystals_produced_kg_h for b in mb_result.bodies]
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(x=body_nums, y=crystals, name="Crystals per body (kg/h)"))
+            fig2.update_layout(
+                title="Crystals produced per body",
+                xaxis_title="Body number",
+                yaxis_title=f"Crystals ({mb_output_flow_unit})",
+                xaxis=dict(tickmode="linear", dtick=1),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            _show_notes(mb_result.notes)
+            for b in mb_result.bodies:
+                if b.notes:
+                    with st.expander(f"Body {b.body_number} notes"):
+                        _show_notes(b.notes)
+        except ValueError as exc:
+            st.error(str(exc))
+        _remember_case("crystallizers-multi-body", {
+            "feed_rate": mb_feed_rate,
+            "feed_rate_unit": mb_feed_rate_unit,
+            "feed_solids": mb_feed_solids,
+            "n_bodies": mb_n_bodies,
+            "body_temps": mb_body_temps,
+            "working_volume": mb_working_volume,
+            "include_secondary": mb_sec,
+        }, {k: v for k, v in asdict(mb_result).items() if k != "bodies"} if "mb_result" in dir() else {})
 
 
 

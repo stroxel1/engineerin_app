@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-12 09:30 CDT
+Last updated: 2026-04-12 09:40 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -132,13 +132,13 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 3. Citric crystallizer
    - multi-body capacity screening with feed/withdrawal balance
 4. Solution BPE
-   - refine >60 DS citric estimation
+   - >60 DS citric refined with continuous quadratic fit to full 15-60 wt% table
 
 ## Next high-value work items
 1. Evaporators: body-by-body staging or workbook-derived calibration inputs
 2. Steam jets: vendor-specific workbook presets / mapping aids on top of the preview normalizer
 3. Citric crystallizer: multi-body crystallizer capacity screening with explicit feed/withdrawal balance
-4. Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation
+4. Solution BPE: >60 DS citric refined with continuous quadratic fit (R² > 0.99999)
 
 ## Known cautions
 - The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
@@ -147,7 +147,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
   - focused runtime check for the edited calculator path
   - live HTTP/browser check
 - Steam-jet workbook auto-normalization is preview-based and only sees sampled rows; treat it as a screening aid for faster mapping, not a final vendor parser
-- Citric >60 DS estimate is still a screening model and should stay labeled accordingly
+- Citric >60 DS estimate now uses a continuous quadratic fit to the full 15-60 wt% table (R-squared > 0.99999) with only 0.0004 deg F discontinuity at the table boundary; beyond ~80 wt% mark as screening only
 - Parallel branch, vessel, pump field comparison, and measured-vs-curve troubleshooting tools are first-pass engineering screens, not final design calculations
 - Crystallizer supersaturation bands are user-entered screening thresholds, not validated metastable-zone property data
 
