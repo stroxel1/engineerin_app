@@ -1,6 +1,6 @@
 # Engineering App Development Continuity
 
-Last updated: 2026-04-12 00:50 CDT
+Last updated: 2026-04-12 02:00 CDT
 
 Purpose:
 Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -9,21 +9,21 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - `/Users/stephentroxel/Documents/projects/engineering_app`
 
 ## Current verified app URL
-- `http://127.0.0.1:8594`
+- `http://127.0.0.1:8597`
 - Verified HTTP status: 200 OK
-- Browser snapshot loaded the Dashboard and the Hydraulics section successfully with no browser console errors
-- Hydraulics > Pump & NPSHa rendered the new suction-vessel + NPSHa scenario screen cleanly during browser verification
+- Browser snapshot loaded the Dashboard and Steam Jets sections successfully with no browser console errors
+- Steam Jets > Workbook family import rendered the new family / motive-basis filter cleanly during browser verification
 
 ## Current repo status
-- Working tree has local edits in:
+- Expect tracked edits in:
   - `README.md`
-  - `core/hydraulics.py`
-  - `core/pump_curves.py`
-  - `docs/development_continuity.md`
+  - `core/curves.py`
+  - `io/normalizers.py`
   - `web_app.py`
-- Untracked paths:
+  - `docs/development_continuity.md`
+- Untracked paths may still exist under:
   - `data/`
-- If resuming, inspect `git status --short` first because prior notes in this file may lag the current git tree
+- If resuming, inspect `git status --short` first because local data artifacts and later commits may have changed the tree again
 
 ## Major completed feature tranches
 1. Fresh `engineering_app` created in Documents/projects and initialized as a git repo
@@ -60,6 +60,8 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - workbook/CSV-driven model-family import
    - grouped curve-library building from tabular vendor data
    - side-by-side operating-point comparison across imported models
+   - workbook-preview auto-normalization for vendor-style curve tables
+   - family / motive-basis filtering for imported curve libraries
 12. Crystallizers expanded with:
    - citric mother-liquor solids auto-filled from published solubility-vs-temperature data
    - crystal-volume-percent slurry basis for citric crystallizers
@@ -79,26 +81,14 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
    - ratio-target blend solver
 15. Dashboard and roadmap now show active work and completed items with strike-through formatting in-app
 
-## Most recent relevant commits
-- `d841a40` Add ratio-target blend quick tool
-- `3d33167` Add utility cost comparison quick tools
-- `98ba1ec` Show active and completed progress on dashboard and roadmap
-- `604089e` Add branch and vessel hydraulics screens
-- `8fc01a3` Fix missing volumetric flow import in hydraulics page
-- `ee6c8e3` Add branch balance and vessel head hydraulics tools
-- `7af1d88` Fix hydraulics page bottom rendering error
-
 ## Files most relevant now
 - `web_app.py`
+- `io/normalizers.py`
+- `core/curves.py`
+- `core/hydraulics.py`
 - `core/steam.py`
 - `core/quicktools.py`
-- `core/hydraulics.py`
-- `core/curves.py`
-- `core/pump_curves.py`
 - `core/crystallizers.py`
-- `core/citric_bpe.py`
-- `core/solutions.py`
-- `core/tanks.py`
 - `README.md`
 - `docs/development_continuity.md`
 
@@ -108,32 +98,27 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 - Selectable measurement units should exist on every input and output
 - Manual BPE is not wanted
 - User especially cares about high-DS citric behavior and practical hydraulic/system tools
-- If a real blocking question comes up, ask; otherwise continue
+- Prefer practical plant calculators before design-grade rigor
 
 ## Current active work focus
 1. Hydraulics refinement
-   - pump curve affinity / rerate screening is now implemented in the Hydraulics > Library / upload pump-curve workflow
-   - suction-vessel-to-pump NPSHa scenario with optional NPSHr margin screening is now implemented in the Pump & NPSHa tab
-   - next hydraulics tranche should extend these vessel scenarios into broader suction/discharge pump troubleshooting workflows
-   - entered-split branch checks already estimate balancing-valve Cv/Kv and equivalent sharp-edge orifice size for branches that need extra throttling
+   - extend the newer suction-vessel / NPSHa scenarios into broader pump troubleshooting workflows
+   - keep emphasis on practical plant line studies rather than academic hydraulics detail
 2. Steam jets
-   - workbook/CSV model-family import and side-by-side comparison now implemented
-   - next steam-jet tranche can add workbook normalization for vendor-specific layouts or motive-basis filters
-3. Crystallizers
-   - supersaturation / metastable-band screening is now implemented on top of citric solubility-based slurry
-   - next crystallizer tranche should use stronger product-specific solubility or supersaturation correlations if validated data become available
+   - extend workbook auto-normalization with vendor-specific sheet presets, larger preview windows if needed, and richer basis metadata display/export
+   - preserve clear warnings that these are screening curves until confirmed against vendor performance data
+3. Evaporators / solution properties
+   - the next best non-steam-jet gap is still calibrated evaporator refinement or stronger >60 DS citric screening
 
 ## Next high-value work items
-1. Steam jets
-   - vendor-layout normalization and motive-basis filtering for imported curve families
-2. Hydraulics
-   - extend suction/discharge vessel modeling from the new NPSHa scenario into broader pump troubleshooting workflows
-3. Crystallizers
-   - replace screening-band heuristics with stronger validated product-specific supersaturation or metastable-zone data when available
+1. Hydraulics
+   - add broader suction/discharge troubleshooting workflows built around the existing NPSHa and system-curve tools
+2. Steam jets
+   - add vendor-specific workbook presets / mapping aids on top of the new preview normalizer
+3. Solution BPE
+   - refine >60 DS citric estimation with stronger literature-backed correlation or clearly segmented screening bands
 4. Evaporators
-   - refine calibrated mode with body-by-body staging, non-condensables/fouling allowances, or workbook-derived calibration inputs
-5. Quick tools
-   - further plant economics / what-if screens as needed
+   - refine calibrated mode with fouling / non-condensable allowances or body-by-body staging
 
 ## Known cautions
 - The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
@@ -141,6 +126,7 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
   - direct Python import check
   - focused runtime check for the edited calculator path
   - live HTTP/browser check
+- Steam-jet workbook auto-normalization is preview-based and only sees sampled rows; treat it as a screening aid for faster mapping, not a final vendor parser
 - Citric >60 DS estimate is still a screening model and should stay labeled accordingly
 - Parallel branch and vessel tools are first-pass engineering screens, not final design calculations
 - Crystallizer supersaturation bands are user-entered screening thresholds, not validated metastable-zone property data
@@ -152,11 +138,28 @@ Keep a durable restart point so work can resume quickly after disconnects or ses
 4. Read `README.md`
 5. Run compile check:
    `python3 -m py_compile $(find /Users/stephentroxel/Documents/projects/engineering_app -name '*.py' | tr '\n' ' ')`
-6. Run import smoke test:
-   `cd /Users/stephentroxel/Documents/projects && PYTHONPATH=. python - <<'PY'
+6. Run import + focused steam-jet normalization smoke test:
+   `cd /Users/stephentroxel/Documents/projects && PYTHONPATH=. /usr/bin/python3 - <<'PY'
 import engineering_app.web_app
-print('import ok')
+from engineering_app.io.normalizers import normalize_curve_workbook
+inspection = {
+    'sheet_previews': [
+        {
+            'sheet_name': 'Vendor Curves',
+            'sample_rows': [
+                ['Model', 'Motive Steam Pressure', 'Suction Load', 'Motive Steam Consumption'],
+                ['TC-A', 3.5, 2000, 3200],
+                ['TC-A', 3.5, 4000, 5000],
+                ['TC-B', 3.5, 2000, 3000],
+                ['TC-B', 3.5, 4000, 4700],
+                ['TC-C', 5.0, 2000, 2800],
+                ['TC-C', 5.0, 4000, 4450],
+            ],
+        }
+    ]
+}
+library = normalize_curve_workbook(inspection)
+print('import ok', len(library.curves), sorted({curve.family for curve in library.curves}))
 PY`
-7. Check live app:
-   `curl -I -s http://127.0.0.1:8594`
+7. Launch a fresh Streamlit instance on a new unused port and verify with browser tools or `curl -I`
 8. Continue the active work focus instead of rediscovering completed work

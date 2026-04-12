@@ -26,6 +26,7 @@ class PerformanceCurve:
 @dataclass
 class CurveLibrary:
     curves: List[PerformanceCurve] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
 
     def list_names(self) -> List[str]:
         return [curve.name for curve in self.curves]

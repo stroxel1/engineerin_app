@@ -104,6 +104,8 @@ Default URL:
   - manual curve editor
   - operating-point screening vs curve
   - workbook/CSV model-family import
+  - workbook-preview auto-normalization for vendor-style curve tables
+  - family / motive-basis filtering for imported curve libraries
   - side-by-side comparison of multiple imported curves at one operating point
   - curve interpolation
   - % of curve and deviation view
@@ -143,6 +145,6 @@ Default URL:
 - The engineering calculator pages now expose selectable units on inputs and displayed outputs.
 - Utility cost tools now include current-vs-proposed comparison screens so annual savings can be estimated directly in-app.
 - Quick Tools now include ratio-target blend solving so operators can back-calculate required dilution/addition rates from a desired final solids target.
-- Workbook inspection and curve normalization are still conservative preview tools, intended to speed up later vendor-specific mapping.
+- Workbook inspection and steam-jet curve normalization remain conservative preview tools, intended to speed up later vendor-specific mapping rather than replace vendor performance confirmation.
 - Parallel branch and vessel tools are first-pass engineering screens; they should be validated against plant topology and instrumentation before design decisions.
 - Crystallizer supersaturation bands are user-entered screening thresholds, not first-principles metastable-zone property data.

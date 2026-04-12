@@ -105,7 +105,7 @@ from engineering_app.core.units import (
     length_to_m,
     seconds_to_time,
 )
-from engineering_app.io.normalizers import normalize_inspection
+from engineering_app.io.normalizers import normalize_curve_workbook, normalize_inspection
 from engineering_app.io.workbook_inspector import inspect_workbook
 
 st.set_page_config(page_title="Engineering App", page_icon="⚙️", layout="wide")
@@ -189,14 +189,16 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("active", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
-            ("active", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
             ("active", "Hydraulics refinement: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
+            ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
             ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+            ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
         ])
     with right:
         st.subheader("Recently completed")
         _render_status_lines([
+            ("done", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
+            ("done", "Steam jets: workbook preview auto-normalization plus family / motive-basis filtering for imported curve libraries"),
             ("done", "Solution BPE for citric, fructose, dextrose, and sucrose"),
             ("done", "Schedule 10S stainless hydraulics sizing from 1/2 in to 12 in"),
             ("done", "Valve/fitting K-factor counting and TDH breakdown"),
@@ -1715,6 +1717,9 @@ def render_steam_jets() -> None:
         uploaded_family = st.file_uploader("Upload steam-jet model-family table", type=["csv", "xlsx", "xlsm"], key="sj_family_upload")
         family_df = None
         source_sheet = None
+        normalized_library = None
+        normalized_notes: list[str] = []
+        preferred_library_mode = "manual"
         if uploaded_family is None:
             default_family_df = pd.DataFrame([
                 {"model": "TC-A", "family": "Motive 3.5 barg", "suction_load": 2000.0, "motive_steam": 3200.0},
@@ -1732,10 +1737,21 @@ def render_steam_jets() -> None:
             source_sheet = "manual-family-table"
         else:
             suffix = Path(uploaded_family.name).suffix.lower()
+            upload_bytes = uploaded_family.getvalue()
             if suffix == ".csv":
                 family_df = pd.read_csv(uploaded_family)
                 source_sheet = uploaded_family.name
             else:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+                    handle.write(upload_bytes)
+                    temp_path = Path(handle.name)
+                try:
+                    inspection = inspect_workbook(temp_path)
+                    normalized_library = normalize_curve_workbook(inspection)
+                    normalized_notes = normalized_library.notes
+                    preferred_library_mode = "normalized" if normalized_library.curves else "manual"
+                finally:
+                    temp_path.unlink(missing_ok=True)
                 workbook = pd.ExcelFile(uploaded_family)
                 source_sheet = st.selectbox("Workbook sheet", workbook.sheet_names, key="sj_family_sheet")
                 family_df = pd.read_excel(workbook, sheet_name=source_sheet)
@@ -1747,14 +1763,14 @@ def render_steam_jets() -> None:
             default_name_index = next((idx for idx, col in enumerate(columns) if str(col).lower() in {"model", "curve", "curve_name", "model_name", "tag", "name"}), 0)
             default_family_index = next((idx + 1 for idx, col in enumerate(columns) if "family" in str(col).lower() or "basis" in str(col).lower()), 0)
             default_x_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["load", "suction", "capacity", "flow"])), 0)
-            default_y_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["steam", "motive", "consumption", "head", "duty"])), min(1, len(columns) - 1))
+            default_y_index = next((idx for idx, col in enumerate(columns) if any(token in str(col).lower() for token in ["steam", "consumption", "head", "duty", "ratio"]) and "pressure" not in str(col).lower()), min(1, len(columns) - 1))
             c1, c2, c3, c4 = st.columns(4)
             curve_name_col = c1.selectbox("Curve/model name column", columns, index=default_name_index, key="sj_family_curve_name_col")
             family_col = c2.selectbox("Family column", family_options, index=default_family_index, key="sj_family_family_col")
             x_col = c3.selectbox("X column", columns, index=default_x_index, key="sj_family_x_col")
             y_col = c4.selectbox("Y column", columns, index=default_y_index, key="sj_family_y_col")
             family_label = None if family_col == "(none)" else family_col
-            library = build_curve_library_from_table(
+            manual_library = build_curve_library_from_table(
                 family_df.to_dict(orient="records"),
                 x_label=x_col,
                 y_label=y_col,
@@ -1762,11 +1778,42 @@ def render_steam_jets() -> None:
                 family_label=family_label,
                 source_sheet=source_sheet,
             )
+            library_mode_options = ["Manual column mapping"]
+            if normalized_library and normalized_library.curves:
+                library_mode_options.insert(0, "Workbook preview auto-normalization")
+            library_mode = st.radio(
+                "Curve-library build mode",
+                library_mode_options,
+                index=0 if preferred_library_mode == "normalized" and len(library_mode_options) > 1 else len(library_mode_options) - 1,
+                horizontal=True,
+                key="sj_family_build_mode",
+            )
+            library = normalized_library if library_mode.startswith("Workbook") and normalized_library is not None else manual_library
             st.metric("Imported curves", f"{len(library.curves)}")
+            if normalized_notes and library_mode.startswith("Workbook"):
+                st.caption("Workbook preview normalization notes:")
+                _show_notes(normalized_notes)
             if library.curves:
-                curve_labels = [f"{curve.name} ({curve.family or 'no family'})" for curve in library.curves]
-                selected_labels = st.multiselect("Curves to compare", curve_labels, default=curve_labels[: min(3, len(curve_labels))], key="sj_family_selected")
-                selected_curves = [curve for curve in library.curves if f"{curve.name} ({curve.family or 'no family'})" in selected_labels]
+                family_values = sorted({curve.family for curve in library.curves if curve.family})
+                if family_values:
+                    selected_families = st.multiselect(
+                        "Family / motive basis filter",
+                        family_values,
+                        default=family_values,
+                        key="sj_family_filter",
+                    )
+                    filtered_curves = [curve for curve in library.curves if curve.family in selected_families]
+                else:
+                    selected_families = []
+                    filtered_curves = list(library.curves)
+                curve_labels = [f"{curve.name} ({curve.family or 'no family'})" for curve in filtered_curves]
+                selected_labels = st.multiselect(
+                    "Curves to compare",
+                    curve_labels,
+                    default=curve_labels[: min(3, len(curve_labels))],
+                    key="sj_family_selected",
+                )
+                selected_curves = [curve for curve in filtered_curves if f"{curve.name} ({curve.family or 'no family'})" in selected_labels]
                 operating_x = st.number_input("Comparison x-value", value=5000.0, key="sj_family_operating_x")
                 actual_y = st.number_input("Actual y-value for comparison", value=6200.0, key="sj_family_actual_y")
                 if selected_curves:
@@ -1806,14 +1853,20 @@ def render_steam_jets() -> None:
                             "family_col": family_label,
                             "x_col": x_col,
                             "y_col": y_col,
+                            "library_mode": library_mode,
+                            "family_filter": selected_families,
                             "operating_x": operating_x,
                             "actual_y": actual_y,
                             "selected_curves": [curve.name for curve in selected_curves],
                         },
                         {"comparison_rows": compare_df.to_dict(orient="records")},
                     )
+                elif filtered_curves:
+                    st.info("Select at least one curve to run the side-by-side comparison.")
+                else:
+                    st.warning("No curves remain after the current family / motive-basis filter.")
             else:
-                st.warning("No valid curves could be built from the selected columns. Check that each model has at least two numeric x/y rows.")
+                st.warning("No valid curves could be built from the selected workbook preview or manual column mapping. Check that each model has at least two numeric x/y rows.")
 
     with tabs[2]:
         st.write("Screen a thermo-compressor from suction vapor load and pressure lift using a simple adiabatic steam-mixing balance. Use vendor curves before equipment selection.")
@@ -2450,15 +2503,16 @@ def render_roadmap() -> None:
 
     st.subheader("Active work")
     _render_status_lines([
-        ("active", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
-        ("active", "Steam jets: add vendor-layout normalization and motive-basis filtering for imported curve families"),
         ("active", "Hydraulics: extend suction/discharge vessel scenarios into broader pump troubleshooting workflows"),
+        ("active", "Steam jets: extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata"),
+        ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
     ])
 
     st.subheader("Next queued additions")
     _render_status_lines([
         ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
-        ("todo", "Evaporators: refine calibrated mode with fouling / non-condensable allowances or body-by-body staging"),
+        ("done", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
+        ("done", "Steam jets: add workbook preview auto-normalization and family / motive-basis filtering for imported curve families"),
         ("done", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
         ("done", "Hydraulics: add suction vessel + NPSHa scenario with optional NPSHr margin screening"),
         ("done", "Crystallizers: add metastable-zone and supersaturation screening on top of citric solubility-based slurry"),
