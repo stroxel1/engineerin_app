@@ -19,6 +19,13 @@ from engineering_app.core.crystallizers import (
     estimate_multi_body_crystallizer,
     MultiBodyCrystallizerInputs,
 )
+from engineering_app.core.solubility_curve import (
+    estimate_metastable_zone,
+    fit_solubility_polynomial,
+    generate_solubility_curve,
+    predict_crystallizer_yield_sweep,
+    solubility_table_points,
+)
 from engineering_app.core.curves import (
     build_curve_library_from_table,
     compare_curves_at_point,
@@ -211,6 +218,7 @@ def render_dashboard() -> None:
         ("Steam & Utilities", "Steam demand, duty back-calculation, and header pressure-change screens"),
         ("Evaporators", "Duty, steam demand, ΔT, multi-effect staging, fouling/NCG, and body-by-body"),
         ("Crystallizers", "Citric solubility-based slurry, yield, circulation ratio, and residence time"),
+        ("Solubility Curve", "Interactive citric acid solubility curve, yield sweep planner, and metastable zone"),
         ("Motors & Drives", "Motor sizing, pump motor power, VFD savings, and loading checks"),
         ("Workbook Import", "Excel/CSV inspection and steam-jet curve family import"),
     ]
@@ -223,7 +231,7 @@ def render_dashboard() -> None:
         with col:
             st.metric(title, "Ready")
             st.caption(desc)
-    cols3 = st.columns(2)
+    cols3 = st.columns(3)
     for col, (title, desc) in zip(cols3, cards[8:]):
         with col:
             st.metric(title, "Ready")
@@ -233,9 +241,9 @@ def render_dashboard() -> None:
     with left:
         st.subheader("Currently being advanced")
         _render_status_lines([
-            ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
-            ("done", "Steam jets: vendor-specific workbook presets / mapping aids on top of the new preview normalizer"),
-            ("active", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance — landed"),
+            ("done", "Citric acid solubility curve viewer with 3rd-degree polynomial fit (R² = 0.9993)"),
+            ("done", "Cooling crystallizer yield sweep planner with metastable zone classification"),
+            ("done", "Metastable zone estimator with interactive zone diagram"),
         ])
     with right:
         st.subheader("Recently completed")
@@ -3479,6 +3487,161 @@ def render_crystallizers() -> None:
 
 
 
+def render_solubility_curve() -> None:
+    st.header("Citric Acid Solubility Curve & Yield Planner")
+    st.caption("Interactive solubility curve with polynomial fit, yield prediction across a cooling temperature sweep, and metastable zone estimation for crystallizer operating parameter planning.")
+
+    tabs = st.tabs(["Solubility Curve", "Yield Sweep Planner", "Metastable Zone"])
+
+    with tabs[0]:
+        st.subheader("Solubility Curve Viewer")
+        c1, c2, c3 = st.columns(3)
+        temp_min = c1.number_input("Minimum temperature (\u00b0C)", min_value=-10.0, max_value=80.0, value=0.0, key="sol_temp_min")
+        temp_max = c2.number_input("Maximum temperature (\u00b0C)", min_value=30.0, max_value=120.0, value=100.0, key="sol_temp_max")
+        num_pts = c3.slider("Number of curve points", min_value=10, max_value=200, value=50, key="sol_num_pts")
+
+        d1, d2 = st.columns(2)
+        fit_degree = d1.selectbox("Polynomial degree", [2, 3, 4, 5], index=2, key="sol_deg")
+        y_unit = d2.selectbox("Y-axis unit", ["wt% solids", "g/100g water"], index=0, key="sol_yunit")
+
+        fit = fit_solubility_polynomial(degree=fit_degree)
+        curve = generate_solubility_curve(temp_min=temp_min, temp_max=temp_max, num_points=num_pts, use_polynomial=True, include_raw_data=True)
+
+        col_r1, col_r2 = st.columns([1, 1])
+        col_r1.metric(f"Polynomial fit (degree {fit_degree})", f"R\u00b2 = {fit.r_squared:.6f}")
+        col_r2.metric(f"Fitting accuracy", f"Max error: {fit.max_error_wt_pct:.4f} wt%", help=f"Mean error: {fit.mean_error_wt_pct:.4f} wt%")
+
+        fig = go.Figure()
+        if y_unit == "wt% solids":
+            fig.add_trace(go.Scatter(x=curve["temperatures"], y=curve["solubility_wt_pct"],
+                                     mode="lines", name=f"Degree {fit_degree} fit", line=dict(color="blue", width=2)))
+            fig.add_trace(go.Scatter(x=[p.temperature_c for p in solubility_table_points()],
+                                     y=[p.solubility_wt_pct for p in solubility_table_points()],
+                                     mode="markers", name="Published data",
+                                     marker=dict(color="red", size=8, symbol="x")))
+            y_label = "Citric acid solubility (wt%)"
+        else:
+            fig.add_trace(go.Scatter(x=curve["temperatures"], y=curve["solubility_g_per_100g"],
+                                     mode="lines", name=f"Degree {fit_degree} fit", line=dict(color="blue", width=2)))
+            fig.add_trace(go.Scatter(x=[p.temperature_c for p in solubility_table_points()],
+                                     y=[p.solubility_g_per_100g_water for p in solubility_table_points()],
+                                     mode="markers", name="Published data",
+                                     marker=dict(color="red", size=8, symbol="x")))
+            y_label = "Citric acid solubility (g/100g water)"
+
+        fig.update_layout(
+            xaxis_title="Temperature (\u00b0C)",
+            yaxis_title=y_label,
+            hovermode="x unified",
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Published data from citric acid solubility tables, converted to wt% basis.")
+
+    with tabs[1]:
+        st.subheader("Cooling Crystallizer Yield Sweep")
+        st.caption("Sweep crystallizer yield across a temperature range to find optimal operating parameters.")
+
+        p1, p2, p3 = st.columns(3)
+        feed_solids = p1.number_input("Feed solids (wt%)", min_value=1.0, max_value=85.0, value=60.0, key="ys_feed_solids")
+        feed_temp = p2.number_input("Feed temperature (\u00b0C)", min_value=10.0, max_value=100.0, value=70.0, key="ys_feed_temp")
+        feed_rate = p3.number_input("Feed rate (kg/h)", min_value=100.0, value=10000.0, step=100.0, key="ys_feed_rate")
+
+        q1, q2, q3, q4 = st.columns(4)
+        sweep_start = q1.number_input("Sweep start temp (\u00b0C)", min_value=0.0, max_value=100.0, value=70.0, key="ys_start")
+        sweep_end = q2.number_input("Sweep end temp (\u00b0C)", min_value=0.0, max_value=80.0, value=20.0, key="ys_end")
+        meta_offset = q3.number_input("Metastable zone width (wt%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5, key="ys_meta")
+        num_sweep_pts = q4.slider("Sweep points", min_value=5, max_value=50, value=20, key="ys_num_pts")
+
+        flow_out_unit = st.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ys_flow_out")
+
+        if sweep_end >= sweep_start:
+            st.warning("Sweep end temperature must be below start temperature for a cooling crystallizer.")
+        else:
+            try:
+                sweep_result = predict_crystallizer_yield_sweep(
+                    feed_solids_wt_pct=feed_solids,
+                    feed_temperature_c=feed_temp,
+                    sweep_start_c=sweep_start,
+                    sweep_end_c=sweep_end,
+                    feed_rate_kg_h=feed_rate,
+                    use_polynomial=True,
+                    metastable_offset_wt_pct=meta_offset,
+                    num_points=num_sweep_pts,
+                )
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Max theoretical yield", f"{sweep_result.max_yield_fraction * 100:.1f}%")
+                m2.metric("at temperature", f"{sweep_result.optimal_temperature_c:.1f} \u00b0C")
+                optimal_crystals = sweep_result.points[-1]["crystals_kg_h"] if sweep_result.points else 0
+                m3.metric("Crystals at optimal",
+                          f"{kg_h_to_mass_flow(optimal_crystals, flow_out_unit):,.0f} {flow_out_unit}")
+                m4.metric("Feed solids", f"{feed_solids:.1f} wt%")
+
+                sweep_df = pd.DataFrame(sweep_result.points)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=sweep_df["temperature_c"], y=sweep_df["yield_pct"],
+                                         mode="lines+markers", name="Yield %", line=dict(color="green", width=2),
+                                         marker=dict(size=6)))
+                fig.add_trace(go.Scatter(x=sweep_df["temperature_c"], y=sweep_df["crystals_kg_h"],
+                                         mode="lines", name=f"Crystals ({flow_out_unit})",
+                                         line=dict(color="blue", dash="dash"), yaxis="y2"))
+                fig.update_layout(
+                    title="Crystallizer yield vs. operating temperature",
+                    xaxis_title="Temperature (\u00b0C)",
+                    yaxis=dict(title="Yield (%)", side="left"),
+                    yaxis2=dict(title=f"Crystals ({flow_out_unit})", side="right", overlaying="y"),
+                    hovermode="x unified",
+                    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                st.subheader("Yield sweep table")
+                st.dataframe(sweep_df, use_container_width=True)
+                _show_notes(sweep_result.notes)
+            except ValueError as exc:
+                st.error(str(exc))
+
+    with tabs[2]:
+        st.subheader("Metastable Zone Estimator")
+        st.caption("Estimate the metastable zone boundaries for crystallizer operation planning.")
+
+        mz1, mz2 = st.columns(2)
+        meta_temp = mz1.number_input("Temperature (\u00b0C)", min_value=0.0, max_value=100.0, value=40.0, key="mz_temp")
+        meta_width = mz2.number_input("Metastable zone width (wt%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5, key="mz_width")
+
+        try:
+            meta_result = estimate_metastable_zone(meta_temp, metastable_width_wt_pct=meta_width)
+
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Equilibrium solubility", f"{meta_result.equilibrium_solids_wt_pct:.2f} wt%")
+            r2.metric("Metastable zone", f"{meta_result.lower_metastable_limit_wt_pct:.2f} to {meta_result.upper_metastable_limit_wt_pct:.2f} wt%")
+            r3.metric("Labile zone starts at", f"{meta_result.labile_zone_start_wt_pct:.2f} wt%")
+
+            low = meta_result.lower_metastable_limit_wt_pct
+            eq = meta_result.equilibrium_solids_wt_pct
+            upper = meta_result.upper_metastable_limit_wt_pct
+            labile = meta_result.labile_zone_start_wt_pct
+
+            fig = go.Figure()
+            fig.add_hrect(y0=0, y1=low, fillcolor="lightblue", opacity=0.3)
+            fig.add_hrect(y0=low, y1=upper, fillcolor="lightyellow", opacity=0.3)
+            fig.add_hline(y=eq, line_dash="dash", line_color="green",
+                          annotation_text=f"Equilibrium ({eq:.2f} wt%)", annotation_position="top right")
+            fig.add_hline(y=labile, line_dash="dot", line_color="red",
+                          annotation_text=f"Labile ({labile:.2f} wt%)", annotation_position="bottom right")
+            fig.update_layout(
+                title=f"Metastable zone diagram at {meta_temp} \u00b0C (width = {meta_width} wt%)",
+                yaxis_title="Solids wt%",
+                yaxis_range=[0, max(labile + 10, 100)],
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            _show_notes(meta_result.notes)
+        except ValueError as exc:
+            st.error(str(exc))
+
+
+
 def render_heat_exchangers() -> None:
     st.header("Heat Exchangers")
     st.caption("LMTD screening, F-factor correction, and UA-based area sizing for shell-and-tube heat exchangers.  Use these results for quick plant checks — not for TEMA or mechanical design.")
@@ -3878,6 +4041,7 @@ PAGES = {
     "Steam & Utilities": render_steam,
     "Evaporators": render_evaporators,
     "Crystallizers": render_crystallizers,
+    "Solubility Curve": render_solubility_curve,
     "Motors & Drives": render_motors_drives,
     "Workbook Import": render_workbook_import,
     "Case Manager": render_case_manager,

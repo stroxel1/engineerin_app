@@ -1,6 +1,6 @@
      1|# Engineering App Development Continuity
      2|
-     3|Last updated: 2026-04-12 11:06 CDT
+     3|Last updated: 2026-04-12 11:12 CDT
      4|
      5|Purpose:
      6|Keep a durable restart point so work can resume quickly after disconnects or session loss.
@@ -98,22 +98,29 @@
     98|   - ratio-target blend solver
     99|15. Dashboard and roadmap now show active work and completed items with strike-through formatting in-app
    100|16. Hydraulics expanded with a pump field troubleshooting check that converts suction/discharge gauge readings into developed head, hydraulic/brake power, vapor-pressure margin, and expected-TDH comparison
-   101|17. Hydraulics expanded again with:
-   102|   - current-vs-baseline field case comparison using measured flow/head/power/suction-margin deltas
-   103|   - measured-point mismatch diagnosis against a selected pump curve at the measured flow
-   104|   - dashboard/roadmap refresh to move the next hydraulics gap to BEP proximity / instrument-bias screening
+17. Hydraulics expanded again with:
+   - current-vs-baseline field case comparison using measured flow/head/power/suction-margin deltas
+   - measured-point mismatch diagnosis against a selected pump curve at the measured flow
+   - dashboard/roadmap refresh to move the next hydraulics gap to BEP proximity / instrument-bias screening
+18. Citric acid solubility curve and yield planner added:
+    - interactive solubility curve viewer with configurable polynomial degree (2-5) and R² stats
+    - published data overlay with wt% and g/100g water units
+    - cooling crystallizer yield sweep planner across a temperature range with metastable zone classification
+    - metastable zone estimator with interactive zone diagram (undersaturated/metastable/labile regions)
+    - full mass-balance yield computation: crystals, liquor rate, yield fraction vs temperature
    105|
-   106|## Files most relevant now
-   107|- `web_app.py`
-   108|- `core/hydraulics.py`
-   109|- `core/pump_curves.py`
-   110|- `io/normalizers.py`
-   111|- `core/curves.py`
-   112|- `core/steam.py`
-   113|- `core/quicktools.py`
-   114|- `core/crystallizers.py`
-   115|- `README.md`
-   116|- `docs/development_continuity.md`
+## Files most relevant now
+- `web_app.py`
+- `core/hydraulics.py`
+- `core/pump_curves.py`
+- `core/solubility_curve.py`
+- `io/normalizers.py`
+- `core/curves.py`
+- `core/steam.py`
+- `core/quicktools.py`
+- `core/crystallizers.py`
+- `README.md`
+- `docs/development_continuity.md`
    117|
    118|## Current user preferences / constraints
    119|- Keep improving the app without stopping to ask
@@ -123,22 +130,22 @@
    123|- User especially cares about high-DS citric behavior and practical hydraulic/system tools
    124|- Prefer practical plant calculators before design-grade rigor
    125|
-   126|## Current active work focus
-   127|1. Evaporators
-   128|   - fouling/NCG allowance screening landed
-   129|   - next: body-by-body staging or workbook-derived calibration inputs
-   130|2. Steam jets
-   131|   - extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata
-   132|3. Citric crystallizer
-   133|   - multi-body capacity screening with feed/withdrawal balance
-   134|4. Solution BPE
-   135|   - >60 DS citric refined with continuous quadratic fit to full 15-60 wt% table
-   136|
-   137|## Next high-value work items
-   138|1. Evaporators: body-by-body staging or workbook-derived calibration inputs
-   139|2. Steam jets: vendor-specific workbook presets / mapping aids on top of the preview normalizer
-   140|3. Citric crystallizer: multi-body crystallizer capacity screening with explicit feed/withdrawal balance
-   141|4. Solution BPE: >60 DS citric refined with continuous quadratic fit (R² > 0.99999)
+## Current active work focus
+1. Citric acid solubility curve
+   - interactive solubility curve with configurable polynomial degree and R² stats — landed
+   - cooling crystallizer yield sweep planner with metastable zone classification — landed
+   - metastable zone estimator with interactive zone diagram — landed
+2. Steam jets
+   - extend workbook auto-normalization with vendor-specific sheet presets and richer basis metadata
+3. Citric crystallizer
+   - multi-body capacity screening with feed/withdrawal balance (already landed)
+
+## Next high-value work items
+1. Steam jets: enhanced vendor-specific workbook presets with auto-detection improvements
+2. Citric crystallizer: population balance modeling for crystal size distribution (CSD)
+3. Evaporators: workbook-derived U-factor calibration from plant data
+4. Steam system: condensate return network analysis and flash steam recovery optimization
+5. Hydraulics: control valve installed characteristic analysis with system curve overlay
    142|
    143|## Known cautions
    144|- The app has had repeated runtime regressions from missing imports or partial edits after feature additions. After edits, always run:
