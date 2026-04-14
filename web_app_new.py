@@ -3025,10 +3025,10 @@ def render_evaporators() -> None:
             with effect_cols[i]:
                 st.markdown(f"**Effect {i+1}**")
                 eff_u = st.number_input(
-                    f"Overall U ({bb_u_unit})", value=2500 - i * 400, min_value=200, key=f"ev_bb_u_{i}"
+                    f"Overall U ({bb_u_unit})", value=2500.0 - i * 400.0, min_value=200.0, key=f"ev_bb_u_{i}"
                 )
                 eff_a = st.number_input(
-                    f"Installed area ({bb_area_unit})", value=200.0 + i * 20, min_value=10, key=f"ev_bb_area_{i}"
+                    f"Installed area ({bb_area_unit})", value=200.0 + i * 20.0, min_value=10.0, key=f"ev_bb_area_{i}"
                 )
                 eff_bpe = st.number_input(
                     f"BPE (°{bb_bpe_unit})", value=3.0 + i * 3.0, min_value=0.0, key=f"ev_bb_bpe_{i}"
