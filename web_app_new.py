@@ -3195,16 +3195,16 @@ def render_crystallizers() -> None:
         feed_solids = c3.number_input("Feed solids (wt%)", value=55.0, key="cr_feed_solids")
 
         c4, c5, c6, c7 = st.columns(4)
-        basis_mode = c4.radio("Slurry basis", ["Crystal vol%", "Crystal wt%"], horizontal=True, key="cr_basis_mode")
-        operating_temp = c5.number_input("Operating temperature", value=45.0, key="cr_temp")
-        operating_temp_unit = c6.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
-        circulation = c7.number_input("Circulation rate", value=72000.0, key="cr_circulation")
+        operating_temp = c4.number_input("Operating temperature", value=45.0, key="cr_temp")
+        operating_temp_unit = c5.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="cr_temp_unit")
+        circulation = c6.number_input("Circulation rate", value=72000.0, key="cr_circulation")
+        circulation_unit = c7.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
 
         c8, c9, c10, c11 = st.columns(4)
-        circulation_unit = c8.selectbox("Circulation unit", MASS_FLOW_UNITS, index=0, key="cr_circulation_unit")
-        slurry_withdrawal = c9.number_input("Slurry withdrawal rate", min_value=0.0, value=12000.0, key="cr_slurry_withdrawal")
-        slurry_withdrawal_unit = c10.selectbox("Slurry withdrawal unit", MASS_FLOW_UNITS, index=0, key="cr_slurry_withdrawal_unit")
-        output_flow_unit = c11.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
+        slurry_withdrawal = c8.number_input("Slurry withdrawal rate", min_value=0.0, value=12000.0, key="cr_slurry_withdrawal")
+        slurry_withdrawal_unit = c9.selectbox("Slurry withdrawal unit", MASS_FLOW_UNITS, index=0, key="cr_slurry_withdrawal_unit")
+        output_flow_unit = c10.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="cr_flow_out")
+        yield_unit = c11.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
 
         c12, c13 = st.columns(2)
         working_volume = c12.number_input("Working volume", value=18.0, key="cr_working_volume")
@@ -3213,26 +3213,26 @@ def render_crystallizers() -> None:
         temp_c = operating_temp if operating_temp_unit == "C" else (operating_temp - 32.0) * 5.0 / 9.0
         auto_mother_liquor_solids = estimate_citric_solubility_wt_pct(temp_c) if product == "citric_acid" else None
 
-        d1, d2, d3, d4 = st.columns(4)
-        if basis_mode == "Crystal vol%":
-            target_crystal_volume_pct = d1.number_input("Target crystals in slurry (vol%)", value=18.0, key="cr_target_vol_pct")
-            slurry_solids = d2.number_input("Displayed slurry crystals (wt%)", value=25.0, key="cr_slurry_solids_display")
-        else:
-            slurry_solids = d1.number_input("Target slurry crystals (wt%)", value=25.0, key="cr_slurry_solids")
-            target_crystal_volume_pct = None
-            d2.caption("Weight-percent basis keeps the older quick-screen approach.")
-        mother_liquor_solids = d3.number_input(
+        d1, d2, d3 = st.columns(3)
+        target_crystal_volume_pct = d1.number_input("Target crystals in slurry (vol%)", value=18.0, key="cr_target_vol_pct",
+            help="Crystal volume percent as measured in the crystallizer (sight glass, sampler, or centrifuge reading).")
+        basis_mode = "Crystal vol%"
+        slurry_solids = 25.0  # placeholder; engine recalculates from vol% + densities
+        mother_liquor_solids = d2.number_input(
             "Mother liquor solids (wt%)",
             value=auto_mother_liquor_solids if auto_mother_liquor_solids is not None else 45.0,
             key="cr_mother_solids",
             disabled=product == "citric_acid",
+            help="Dissolved solids in the liquid phase. For citric acid this is auto-set from temperature-dependent solubility data.",
         )
-        yield_unit = d4.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
+        _ = d3.empty()
 
         e1, e2, e3, e4 = st.columns(4)
-        crystal_density = e1.number_input("Crystal density", value=1660.0, key="cr_crystal_density")
+        crystal_density = e1.number_input("Crystal density", value=1660.0, key="cr_crystal_density",
+            help="Density of the solid crystals. Used to convert your vol% reading to a mass balance. Citric acid monohydrate ≈ 1,540–1,660 kg/m³.")
         cr_density_unit = e2.selectbox("Density unit", DENSITY_UNITS, index=0, key="cr_density_unit")
-        mother_liquor_density = e3.number_input("Mother liquor density", value=1280.0, key="cr_ml_density")
+        mother_liquor_density = e3.number_input("Mother liquor density", value=1280.0, key="cr_ml_density",
+            help="Density of the liquid phase surrounding the crystals. Needed alongside crystal density to convert vol% to wt% for the mass balance.")
         _cr_ml_du = e4.caption(f"({cr_density_unit})")
 
         f1, f2 = st.columns(2)
