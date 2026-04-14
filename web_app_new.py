@@ -3230,10 +3230,10 @@ def render_crystallizers() -> None:
         e1, e2, e3, e4 = st.columns(4)
         crystal_density = e1.number_input("Crystal density", value=1660.0, key="cr_crystal_density",
             help="Density of the solid crystals. Used to convert your vol% reading to a mass balance. Citric acid monohydrate ≈ 1,540–1,660 kg/m³.")
-        cr_density_unit = e2.selectbox("Density unit", DENSITY_UNITS, index=0, key="cr_density_unit")
+        cr_density_unit = e2.selectbox("Crystal density unit", DENSITY_UNITS, index=0, key="cr_density_unit")
         mother_liquor_density = e3.number_input("Mother liquor density", value=1280.0, key="cr_ml_density",
-            help="Density of the liquid phase surrounding the crystals. Needed alongside crystal density to convert vol% to wt% for the mass balance.")
-        _cr_ml_du = e4.caption(f"({cr_density_unit})")
+            help="Density of the liquid phase surrounding the crystals. Needed alongside crystal density to convert vol% to wt% for the mass balance. You can enter as kg/m³, SG, or lb/ft³.")
+        cr_ml_density_unit = e4.selectbox("ML density unit", DENSITY_UNITS, index=0, key="cr_ml_density_unit")
 
         f1, f2 = st.columns(2)
         supersat_screen_band_pct = f1.number_input(
@@ -3267,7 +3267,7 @@ def render_crystallizers() -> None:
                 operating_temperature_c=temp_c,
                 product=product,
                 crystal_density_kg_m3=density_to_kg_m3(crystal_density, cr_density_unit),
-                mother_liquor_density_kg_m3=density_to_kg_m3(mother_liquor_density, cr_density_unit),
+                mother_liquor_density_kg_m3=density_to_kg_m3(mother_liquor_density, cr_ml_density_unit),
                 target_crystal_volume_pct=target_crystal_volume_pct,
                 slurry_withdrawal_rate_value=slurry_withdrawal,
                 slurry_withdrawal_rate_unit=slurry_withdrawal_unit,
@@ -3356,10 +3356,11 @@ def render_crystallizers() -> None:
         mb_vol_unit = mb_vol_c2.selectbox("Volume unit", VOLUME_UNITS, index=0, key="mb_cr_vol_unit")
         mb_output_flow_unit = mb_vol_c3.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="mb_cr_flow_out")
 
-        mb_d1, mb_d2, mb_d3 = st.columns(3)
+        mb_d1, mb_d2, mb_d3, mb_d4 = st.columns(4)
         mb_crystal_density = mb_d1.number_input("Crystal density", value=1660.0, key="mb_cr_crystal_density")
-        mb_density_unit = mb_d2.selectbox("Density unit", DENSITY_UNITS, index=0, key="mb_cr_density_unit")
+        mb_density_unit = mb_d2.selectbox("Crystal density unit", DENSITY_UNITS, index=0, key="mb_cr_density_unit")
         mb_ml_density = mb_d3.number_input("Mother liquor density", value=1280.0, key="mb_cr_ml_density")
+        mb_ml_density_unit = mb_d4.selectbox("ML density unit", DENSITY_UNITS, index=0, key="mb_cr_ml_density_unit")
 
         mb_sec = st.checkbox("Include secondary feed points", value=False, help="Allow additional feed inlets at intermediate bodies.", key="mb_cr_sec_feed")
         if mb_sec:
@@ -3387,7 +3388,7 @@ def render_crystallizers() -> None:
                 body_temperatures_c=[temperature_to_c(t, mb_temp_unit) for t in mb_body_temps],
                 working_volume_per_body_m3=volume_to_m3(mb_working_volume, mb_vol_unit),
                 crystal_density_kg_m3=density_to_kg_m3(mb_crystal_density, mb_density_unit),
-                mother_liquor_density_kg_m3=density_to_kg_m3(mb_ml_density, mb_density_unit),
+                mother_liquor_density_kg_m3=density_to_kg_m3(mb_ml_density, mb_ml_density_unit),
                 include_secondary_feed_points=mb_sec,
                 secondary_feed_rates_value=mb_sec_rates if mb_sec and mb_sec_rates else None,
                 secondary_feed_solids_wt_pct=mb_sec_solids if mb_sec and mb_sec_solids else None,
