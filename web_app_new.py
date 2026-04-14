@@ -3,7 +3,28 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
+import sys
 import tempfile
+
+# ---------------------------------------------------------------------------
+# Bootstrap: make 'engineering_app' package importable regardless of the
+# directory name used by the host (local dev, PyInstaller, Streamlit Cloud).
+# ---------------------------------------------------------------------------
+_THIS_DIR = Path(__file__).resolve().parent
+_PARENT_DIR = _THIS_DIR.parent
+
+if str(_PARENT_DIR) not in sys.path:
+    sys.path.insert(0, str(_PARENT_DIR))
+
+# Streamlit Cloud may clone the repo under an arbitrary directory name.
+# If the folder isn't literally called "engineering_app", register this
+# directory as the engineering_app package so absolute imports still resolve.
+if _THIS_DIR.name != "engineering_app":
+    import types as _types
+    _pkg = _types.ModuleType("engineering_app")
+    _pkg.__path__ = [str(_THIS_DIR)]
+    _pkg.__file__ = str(_THIS_DIR / "__init__.py")
+    sys.modules.setdefault("engineering_app", _pkg)
 
 import pandas as pd
 import plotly.express as px
@@ -96,35 +117,50 @@ from engineering_app.core.quicktools import (
 from engineering_app.core.solutions import PRODUCT_PROFILES
 from engineering_app.core.steam import duty_from_steam_flow, evaluate_steam_header_pressure_change, thermo_compressor_balance
 from engineering_app.core.units import (
+    AREA_UNITS,
     DELTA_TEMPERATURE_UNITS,
     DENSITY_UNITS,
+    HTC_UNITS,
     LENGTH_UNITS,
     MASS_FLOW_UNITS,
     PERCENT_UNITS,
     POWER_UNITS,
     PRESSURE_UNITS,
+    SPECIFIC_ENERGY_UNITS,
     TEMPERATURE_UNITS,
     TIME_UNITS,
     VELOCITY_UNITS,
     VISCOSITY_UNITS,
     VOLUME_UNITS,
     VOLUMETRIC_FLOW_UNITS,
+    area_to_m2,
     c_to_delta_temperature,
     c_to_temperature,
     cp_to_viscosity,
+    htc_to_w_m2k,
     kg_h_to_mass_flow,
     kg_m3_to_density,
+    kj_kg_to_specific_energy,
     kpa_abs_to_pressure,
     kw_to_power,
+    m2_to_area,
     m3_h_to_volumetric_flow,
-    pressure_to_kpa_abs,
-    volumetric_flow_to_m3_h,
-    temperature_to_c,
     m3_to_volume,
     m_s_to_velocity,
     m_to_length,
-    length_to_m,
+    mass_flow_to_kg_h,
+    pressure_to_kpa_abs,
     seconds_to_time,
+    specific_energy_to_kj_kg,
+    temperature_to_c,
+    volume_to_m3,
+    volumetric_flow_to_m3_h,
+    w_m2k_to_htc,
+    length_to_m,
+    density_to_kg_m3,
+    viscosity_to_cp,
+    delta_temperature_to_c,
+    power_to_kw,
 )
 from engineering_app.core.heat_exchangers import (
     compare_pass_arrangements,
@@ -193,84 +229,6 @@ def _display_delta_t(value_c: float, unit: str) -> float:
     return c_to_delta_temperature(value_c, unit)
 
 
-
-def _render_status_lines(items: list[tuple[str, str]]) -> None:
-    for status, text in items:
-        if status == "done":
-            st.markdown(f"- ~~{text}~~")
-        elif status == "active":
-            st.markdown(f"- **IN PROGRESS:** {text}")
-        else:
-            st.markdown(f"- {text}")
-
-
-
-def render_dashboard() -> None:
-    st.title("Engineering App")
-    st.write("Practical plant engineering tools for steam, hydraulics, heat exchangers, evaporation, crystallization, motors & drives, solution properties, and workbook inspection.")
-    cols = st.columns(4)
-    cards = [
-        ("Quick tools", "Conversions, flash steam, blending, tank inventory, Brix reconciliation, and utility cost"),
-        ("Solution BPE", "Citric, fructose, dextrose, and sucrose BPE screening"),
-        ("Hydraulics", "Line sizing, TDH, branches, vessels, valves, pump power, and NPSHa"),
-        ("Heat Exchangers", "LMTD, F-factor, UA-based area sizing, and pass arrangement comparison"),
-        ("Steam jets", "Curve comparison, workbook import, and thermo-compressor screening"),
-        ("Steam & Utilities", "Steam demand, duty back-calculation, and header pressure-change screens"),
-        ("Evaporators", "Duty, steam demand, ΔT, multi-effect staging, fouling/NCG, and body-by-body"),
-        ("Crystallizers", "Citric solubility-based slurry, yield, circulation ratio, and residence time"),
-        ("Solubility Curve", "Interactive citric acid solubility curve, yield sweep planner, and metastable zone"),
-        ("Motors & Drives", "Motor sizing, pump motor power, VFD savings, and loading checks"),
-        ("Workbook Import", "Excel/CSV inspection and steam-jet curve family import"),
-    ]
-    for col, (title, desc) in zip(cols, cards[:4]):
-        with col:
-            st.metric(title, "Ready")
-            st.caption(desc)
-    cols2 = st.columns(4)
-    for col, (title, desc) in zip(cols2, cards[4:8]):
-        with col:
-            st.metric(title, "Ready")
-            st.caption(desc)
-    cols3 = st.columns(3)
-    for col, (title, desc) in zip(cols3, cards[8:]):
-        with col:
-            st.metric(title, "Ready")
-            st.caption(desc)
-
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Currently being advanced")
-        _render_status_lines([
-            ("done", "High-solids citric BPE: Dühring-rule correlation with pressure scaling (R² = 0.999996)"),
-            ("active", "Evaporators: workbook-derived U-factor calibration from plant data — next target"),
-        ])
-    with right:
-        st.subheader("Recently completed")
-        _render_status_lines([
-            ("done", "Evaporators: multi-effect staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening"),
-            ("done", "Evaporators: add fouling and NCG allowance screening for U-degradation and ΔT-penalty"),
-            ("done", "Steam-jet workbook-driven model-family import and side-by-side comparison"),
-            ("done", "Steam jets: workbook preview auto-normalization plus family / motive-basis filtering for imported curve libraries"),
-            ("done", "Solution BPE for citric, fructose, dextrose, and sucrose"),
-            ("done", "Schedule 10S stainless hydraulics sizing from 1/2 in to 12 in"),
-            ("done", "Valve/fitting K-factor counting and TDH breakdown"),
-            ("done", "Pump/system curve overlay"),
-            ("done", "Hydraulics pump curve library/upload matched against system curves"),
-            ("done", "Pump rerate / affinity screening from speed or impeller changes"),
-            ("done", "Suction vessel + NPSHa scenario with optional NPSHr margin screening"),
-            ("done", "Pump field troubleshooting check from suction/discharge gauges with developed head and expected-TDH comparison"),
-            ("done", "Pump field baseline comparison and measured-vs-curve mismatch diagnosis"),
-            ("done", "Parallel branch balancing-device Cv/Kv and orifice sizing screen"),
-            ("done", "Evaporators: body-by-body staging with per-effect U/area, feed preheat, forward/backward flow, and area utilization"),
-            ("done", "Citric crystallizer slurry basis plus supersaturation / metastable-band screening"),
-            ("done", "Parallel branch and vessel/static-head screens"),
-            ("done", "Evaporator design-calibrated U·A·ΔT capacity mode"),
-            ("done", "Quick utility cost screens plus current-vs-proposed savings deltas for steam and electricity"),
-            ("done", "Citric BPE >60 wt% refined with Dühring-rule correlation calibrated to 15-60 wt% table (R² = 0.999996, pressure-scalable)"),
-        ])
-
-
-
 def render_quick_tools() -> None:
     st.header("Quick Tools")
     tabs = st.tabs(["Pressure", "Temperature", "Thermal Point", "Steam Flash", "Solution Properties", "Brix Reconciliation", "Dilution", "Two-Stream Blend", "Ratio-Target Blend", "Tank Inventory", "Utility Cost"])
@@ -325,7 +283,6 @@ def render_quick_tools() -> None:
         output_flow_unit = c7.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="qt_flash_flow_out")
         temp_c = condensate_temp if temp_unit == "C" else (condensate_temp - 32.0) * 5.0 / 9.0
         condensate_flow_kg_h = condensate_flow if condensate_flow_unit == "kg/h" else None
-        from engineering_app.core.units import mass_flow_to_kg_h
         result = flash_fraction(temp_c, flash_pressure_value, flash_pressure_unit, mass_flow_to_kg_h(condensate_flow, condensate_flow_unit))
         m1, m2, m3 = st.columns(3)
         m1.metric("Flash fraction", f"{result.flash_fraction:.3f}")
@@ -1085,7 +1042,6 @@ def render_hydraulics() -> None:
     st.caption("Sized for plant line studies with stainless schedule 10S presets, fittings, TDH, pump power, NPSHa, segmented systems, and control-valve sizing.")
     tabs = st.tabs(["Single line", "Size comparison", "Pump & NPSHa", "Segmented system", "Parallel branches", "Vessel/static head", "Control valve", "Pump/System curve"])
 
-    from engineering_app.core.units import density_to_kg_m3, viscosity_to_cp
 
     base1, base2, base3, base4 = st.columns(4)
     flow_value = base1.number_input("Flow", value=100.0, key="hyd_flow")
@@ -2491,7 +2447,6 @@ def render_steam() -> None:
     st.caption("Quick utility screens for steam demand, duty back-calculation, and steam-header pressure-change impacts on capacity.")
     tab1, tab2, tab3 = st.tabs(["Steam for duty", "Duty from steam", "Header pressure change"])
 
-    from engineering_app.core.units import delta_temperature_to_c, power_to_kw
 
     with tab1:
         c1, c2, c3, c4 = st.columns(4)
@@ -2641,7 +2596,7 @@ def render_evaporators() -> None:
     operating_pressure = c7.number_input("Operating pressure", value=20.0, key="ev_operating_pressure")
     operating_pressure_unit = c8.selectbox("Operating pressure unit", PRESSURE_UNITS, index=0, key="ev_operating_pressure_unit")
 
-    c9, c10, c11, c12 = st.columns(4)
+    c9, c10, c11, c12, c13 = st.columns(5)
     passes = int(c9.number_input("Passes", min_value=1, value=2, step=1, key="ev_passes"))
     recirc = c10.number_input("Recirculation ratio", value=4.0, key="ev_recirc")
     evaporator_product = c11.selectbox(
@@ -2650,7 +2605,8 @@ def render_evaporators() -> None:
         format_func=lambda key: PRODUCT_PROFILES[key].display_name,
         key="ev_product",
     )
-    duty_per_kg = c12.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_spec_duty")
+    duty_per_kg = c12.number_input("Specific evaporation duty", value=2250.0, key="ev_spec_duty")
+    spec_duty_unit = c13.selectbox("Specific duty unit", SPECIFIC_ENERGY_UNITS, index=0, key="ev_spec_duty_unit")
 
     output1, output2, output3, output4 = st.columns(4)
     output_flow_unit = output1.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_flow_out")
@@ -2685,7 +2641,7 @@ def render_evaporators() -> None:
                 passes=passes,
                 recirculation_ratio=recirc,
                 bpe_c=bpe_c,
-                estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
+                estimated_specific_evaporation_duty_kj_kg=specific_energy_to_kj_kg(duty_per_kg, spec_duty_unit),
             )
         )
         df = pd.DataFrame(
@@ -2724,10 +2680,12 @@ def render_evaporators() -> None:
 
     with tabs[1]:
         st.caption("Estimate whether the installed evaporator body can actually reach the entered target concentration at the current pressure basis.")
-        d1, d2, d3 = st.columns(3)
-        overall_u = d1.number_input("Overall U (W/m²·K)", min_value=0.0, value=1800.0, key="ev_cal_u")
-        installed_area = d2.number_input("Installed area (m²)", min_value=0.0, value=250.0, key="ev_cal_area")
-        availability_pct = d3.number_input("Availability / cleanliness (%)", min_value=0.0, value=85.0, key="ev_cal_availability")
+        d1, d2, d3, d4, d5, d6 = st.columns(6)
+        overall_u = d1.number_input("Overall U", min_value=0.0, value=1800.0, key="ev_cal_u")
+        ev_u_unit = d2.selectbox("U unit", HTC_UNITS, index=0, key="ev_cal_u_unit")
+        installed_area = d3.number_input("Installed area", min_value=0.0, value=250.0, key="ev_cal_area")
+        ev_area_unit = d4.selectbox("Area unit", AREA_UNITS, index=0, key="ev_cal_area_unit")
+        availability_pct = d5.number_input("Availability (%)", min_value=0.0, value=85.0, key="ev_cal_availability")
 
         calibrated = estimate_design_calibrated_evaporation(
             EvaporatorDesignCalibrationInputs(
@@ -2740,9 +2698,9 @@ def render_evaporators() -> None:
                 operating_pressure_value=operating_pressure,
                 operating_pressure_unit=operating_pressure_unit,
                 bpe_c=bpe_c,
-                estimated_specific_evaporation_duty_kj_kg=duty_per_kg,
-                overall_u_w_m2_k=overall_u,
-                installed_area_m2=installed_area,
+                estimated_specific_evaporation_duty_kj_kg=specific_energy_to_kj_kg(duty_per_kg, spec_duty_unit),
+                overall_u_w_m2_k=htc_to_w_m2k(overall_u, ev_u_unit),
+                installed_area_m2=area_to_m2(installed_area, ev_area_unit),
                 availability_factor=availability_pct / 100.0,
             )
         )
@@ -2754,7 +2712,7 @@ def render_evaporators() -> None:
         m4.metric("Available duty", f"{kw_to_power(calibrated.available_duty_kw, duty_output_unit):,.1f} {duty_output_unit}")
 
         n1, n2, n3, n4 = st.columns(4)
-        n1.metric("Required area", f"{calibrated.required_area_m2:,.1f} m²")
+        n1.metric("Required area", f"{m2_to_area(calibrated.required_area_m2, ev_area_unit):,.1f} {ev_area_unit}")
         n2.metric("Area utilization", f"{calibrated.area_utilization_fraction * 100.0:,.1f} %")
         n3.metric("Achievable product rate", f"{kg_h_to_mass_flow(calibrated.achievable_product_rate_kg_h, output_flow_unit):,.1f} {output_flow_unit}")
         achievable_product_solids = calibrated.dissolved_solids_kg_h / max(calibrated.achievable_product_rate_kg_h, 1e-9) * 100.0
@@ -2791,10 +2749,11 @@ def render_evaporators() -> None:
 
     with tabs[2]:
         st.caption("Estimate how fouling resistances and non-condensable gases degrade an evaporator's effective U and driving ΔT. Enter clean U and fouling factors typical for your service; treat outputs as screening-level allowances, not design margins.")
-        f0, f1, f2 = st.columns(3)
-        clean_u_val = f0.number_input("Clean overall U (W/m²·K)", min_value=100.0, value=2000.0, key="ev_fouling_clean_u")
-        tube_fouling = f1.number_input("Tube-side (liquor) fouling resistance (m²·K/W)", min_value=0.0, value=0.00035, format="%.5f", key="ev_fouling_tube")
-        steam_fouling = f2.number_input("Steam-side fouling resistance (m²·K/W)", min_value=0.0, value=0.00010, format="%.5f", key="ev_fouling_steam")
+        f0, f1, f2, f0u = st.columns(4)
+        clean_u_val = f0.number_input("Clean overall U", min_value=100.0, value=2000.0, key="ev_fouling_clean_u")
+        fouling_u_unit = f0u.selectbox("U unit", HTC_UNITS, index=0, key="ev_fouling_u_unit")
+        tube_fouling = f1.number_input("Tube-side fouling (m²·K/W)", min_value=0.0, value=0.00035, format="%.5f", key="ev_fouling_tube")
+        steam_fouling = f2.number_input("Steam-side fouling (m²·K/W)", min_value=0.0, value=0.00010, format="%.5f", key="ev_fouling_steam")
 
         f3, f4, f5, f6 = st.columns(4)
         ncg_fraction = f3.number_input("NCG mole fraction in steam space", min_value=0.0, max_value=0.15, value=0.02, step=0.005, key="ev_fouling_ncg")
@@ -2805,12 +2764,13 @@ def render_evaporators() -> None:
         fouling_operating_pressure = f6.number_input(
             "Vapor body operating pressure", value=operating_pressure, key="ev_fouling_operating_pressure",
         )
-        f7, f8 = st.columns(2)
+        f7, f8, f9 = st.columns(3)
         fouling_operating_pressure_unit = f7.selectbox("Operating pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index(operating_pressure_unit) if operating_pressure_unit in PRESSURE_UNITS else 0, key="ev_fouling_operating_pressure_unit")
-        fouling_bpe = f8.number_input("BPE (°C)", value=bpe_c if bpe_unit == "C" else bpe_c, key="ev_fouling_bpe_c")
+        fouling_bpe = f8.number_input("BPE", value=bpe_c if bpe_unit == "C" else bpe_c, key="ev_fouling_bpe_c")
+        fouling_bpe_unit = f9.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_fouling_bpe_unit")
 
         fouling_inputs = FoulingAllowanceInputs(
-            clean_u_w_m2_k=clean_u_val,
+            clean_u_w_m2_k=htc_to_w_m2k(clean_u_val, fouling_u_unit),
             tube_side_fouling_m2_k_w=tube_fouling,
             steam_side_fouling_m2_k_w=steam_fouling,
             ncg_mole_fraction=ncg_fraction,
@@ -2818,21 +2778,21 @@ def render_evaporators() -> None:
             steam_pressure_unit=fouling_steam_pressure_unit,
             operating_pressure_value=fouling_operating_pressure,
             operating_pressure_unit=fouling_operating_pressure_unit,
-            bpe_c=fouling_bpe,
+            bpe_c=delta_temperature_to_c(fouling_bpe, fouling_bpe_unit),
         )
         fouling_result = evaluate_fouling_and_ncg_allowance(fouling_inputs)
 
         u1, u2, u3, u4 = st.columns(4)
-        u1.metric("Clean U", f"{fouling_result.clean_u_w_m2_k:,.0f} W/m²·K")
-        u2.metric("Fouled U", f"{fouling_result.dirty_u_w_m2_k:,.0f} W/m²·K", delta=f"{fouling_result.u_degradation_pct:.1f}% degradation")
-        u3.metric("Clean condensing temp", f"{_display_temperature(fouling_result.clean_condensing_temp_c, temp_out_unit):,.1f} °{temp_out_unit}")
-        u4.metric("Effective condensing (w/ NCG)", f"{_display_temperature(fouling_result.effective_condensing_temp_c, temp_out_unit):,.1f} °{temp_out_unit}")
+        u1.metric("Clean U", f"{w_m2k_to_htc(fouling_result.clean_u_w_m2_k, fouling_u_unit):,.0f} {fouling_u_unit}")
+        u2.metric("Fouled U", f"{w_m2k_to_htc(fouling_result.dirty_u_w_m2_k, fouling_u_unit):,.0f} {fouling_u_unit}", delta=f"{fouling_result.u_degradation_pct:.1f}% degradation")
+        u3.metric("Clean condensing temp", f"{_display_temperature(fouling_result.clean_condensing_temp_c, output_temp_unit):,.1f} °{output_temp_unit}")
+        u4.metric("Effective condensing (w/ NCG)", f"{_display_temperature(fouling_result.effective_condensing_temp_c, output_temp_unit):,.1f} °{output_temp_unit}")
 
         v1, v2, v3, v4 = st.columns(4)
-        v1.metric("Condensing temp penalty", f"C{fouling_result.condensing_temp_penalty_c:+.2f} °C")
-        v2.metric("Clean ΔT", f"{_display_delta_t(fouling_result.clean_delta_t_c, dt_out_unit):,.2f} °{dt_out_unit}")
-        v3.metric("Fouled ΔT", f"{_display_delta_t(fouling_result.dirty_delta_t_c, dt_out_unit):,.2f} °{dt_out_unit}")
-        v4.metric("ΔT penalty", f"C{fouling_result.delta_t_penalty_c:+.2f} °C")
+        v1.metric("Condensing temp penalty", f"{_display_delta_t(fouling_result.condensing_temp_penalty_c, delta_t_unit):+.2f} °{delta_t_unit}")
+        v2.metric("Clean ΔT", f"{_display_delta_t(fouling_result.clean_delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
+        v3.metric("Fouled ΔT", f"{_display_delta_t(fouling_result.dirty_delta_t_c, delta_t_unit):,.2f} °{delta_t_unit}")
+        v4.metric("ΔT penalty", f"{_display_delta_t(fouling_result.delta_t_penalty_c, delta_t_unit):+.2f} °{delta_t_unit}")
 
         w1, w2, w3 = st.columns(3)
         w1.metric(
@@ -2889,12 +2849,14 @@ def render_evaporators() -> None:
         me_last_effect_pressure = e3.number_input("Last-effect pressure", value=12.0, key="ev_me_last_pressure")
         me_last_effect_pressure_unit = e4.selectbox("Last-effect pressure unit", PRESSURE_UNITS, index=0, key="ev_me_last_pressure_unit")
 
-        e5, e6 = st.columns(2)
-        me_duty_per_kg = e5.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_me_spec_duty")
-        me_temp_out_unit = e6.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_me_temp_out")
+        e5, e6, e7 = st.columns(3)
+        me_duty_per_kg = e5.number_input("Specific evaporation duty", value=2250.0, key="ev_me_spec_duty")
+        me_spec_duty_unit = e6.selectbox("Specific duty unit", SPECIFIC_ENERGY_UNITS, index=0, key="ev_me_spec_duty_unit")
+        me_temp_out_unit = e7.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_me_temp_out")
 
-        st.markdown("**Per-effect BPE (°C)**")
-        st.caption("Enter BPE for each effect based on the expected liquor concentration at that effect. The app will pad with the last entered value if fewer than the number of effects is provided.")
+        me_bpe_u1, me_bpe_u2 = st.columns([1, 3])
+        me_bpe_unit = me_bpe_u1.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_me_bpe_unit")
+        st.caption(f"Enter BPE for each effect ({me_bpe_unit}). The app will pad with the last entered value if fewer than the number of effects.")
         bpe_cols = st.columns(min(me_n_effects, 6))
         me_bpe_list = []
         for i in range(me_n_effects):
@@ -2916,8 +2878,8 @@ def render_evaporators() -> None:
                 steam_pressure_unit=me_steam_pressure_unit,
                 last_effect_pressure_value=me_last_effect_pressure,
                 last_effect_pressure_unit=me_last_effect_pressure_unit,
-                bpe_c_per_effect=me_bpe_list,
-                estimated_specific_evaporation_duty_kj_kg=me_duty_per_kg,
+                bpe_c_per_effect=[delta_temperature_to_c(b, me_bpe_unit) for b in me_bpe_list],
+                estimated_specific_evaporation_duty_kj_kg=specific_energy_to_kj_kg(me_duty_per_kg, me_spec_duty_unit),
             )
 
             m1, m2, m3, m4 = st.columns(4)
@@ -2929,16 +2891,16 @@ def render_evaporators() -> None:
             s1, s2, s3 = st.columns(3)
             s1.metric("Steam temperature", f"{_display_temperature(me_result.steam_temperature_c, me_temp_out_unit):,.1f} °{me_temp_out_unit}")
             s2.metric("Last-effect boiling temp", f"{_display_temperature(me_result.last_effect_boiling_temperature_c, me_temp_out_unit):,.1f} °{me_temp_out_unit}")
-            s3.metric("Overall ΔT", f"{me_result.overall_delta_t_c:.1f} °C")
+            s3.metric("Overall ΔT", f"{me_result.overall_delta_t_c * (1.8 if me_temp_out_unit == 'F' else 1.0):.1f} °{me_temp_out_unit}")
 
             st.subheader("Effect-by-effect profile")
             effect_df = pd.DataFrame([
                 {
                     "Effect": f"{eff.effect_number}",
-                    f"Steam temp (°C)": _display_temperature(eff.steam_temperature_c, me_temp_out_unit),
-                    f"Boiling temp (°C)": _display_temperature(eff.boiling_temperature_c, me_temp_out_unit),
-                    "BPE (°C)": eff.bpe_c,
-                    "Net ΔT (°C)": eff.delta_t_c,
+                    f"Steam temp (°{me_temp_out_unit})": _display_temperature(eff.steam_temperature_c, me_temp_out_unit),
+                    f"Boiling temp (°{me_temp_out_unit})": _display_temperature(eff.boiling_temperature_c, me_temp_out_unit),
+                    f"BPE (°{me_bpe_unit})": c_to_delta_temperature(eff.bpe_c, me_bpe_unit),
+                    f"Net ΔT (°{me_temp_out_unit})": eff.delta_t_c * (1.8 if me_temp_out_unit == 'F' else 1.0),
                     "Pressure (kPa abs)": eff.pressure_kpa_abs,
                     f"Evaporation ({me_feed_rate_unit})": kg_h_to_mass_flow(eff.evaporation_kg_h, me_feed_rate_unit),
                     "Cumulative evap (kg/h)": eff.cumulative_evaporation_kg_h,
@@ -2950,15 +2912,15 @@ def render_evaporators() -> None:
 
             # Temperature profile plot
             effect_nums = [eff.effect_number for eff in me_result.effects]
-            steam_temps = [eff.steam_temperature_c for eff in me_result.effects]
-            boil_temps = [eff.boiling_temperature_c for eff in me_result.effects]
+            steam_temps = [_display_temperature(eff.steam_temperature_c, me_temp_out_unit) for eff in me_result.effects]
+            boil_temps = [_display_temperature(eff.boiling_temperature_c, me_temp_out_unit) for eff in me_result.effects]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=effect_nums, y=steam_temps, mode="lines+markers", name="Steam temp", line=dict(dash="dash")))
             fig.add_trace(go.Scatter(x=effect_nums, y=boil_temps, mode="lines+markers", name="Boiling temp"))
             fig.update_layout(
                 title="Multi-effect temperature profile",
                 xaxis_title="Effect number",
-                yaxis_title="Temperature (°C)",
+                yaxis_title=f"Temperature (°{me_temp_out_unit})",
                 xaxis=dict(tickmode="linear", dtick=1),
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -3037,10 +2999,16 @@ def render_evaporators() -> None:
         bb_last_effect_pressure = bb11.number_input("Last-effect pressure", value=12.0, key="ev_bb_last_pressure")
         bb_last_effect_pressure_unit = bb12.selectbox("Last-effect pressure unit", PRESSURE_UNITS, index=0, key="ev_bb_last_pressure_unit")
 
-        bb13, bb14, bb15 = st.columns(3)
-        bb_duty_per_kg = bb13.number_input("Specific evaporation duty (kJ/kg)", value=2250.0, key="ev_bb_spec_duty")
-        bb_temp_out_unit = bb14.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_bb_temp_out")
-        bb_flow_out_unit = bb15.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_bb_flow_out")
+        bb13, bb14, bb15, bb16 = st.columns(4)
+        bb_duty_per_kg = bb13.number_input("Specific evaporation duty", value=2250.0, key="ev_bb_spec_duty")
+        bb_spec_duty_unit = bb14.selectbox("Specific duty unit", SPECIFIC_ENERGY_UNITS, index=0, key="ev_bb_spec_duty_unit")
+        bb_temp_out_unit = bb15.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="ev_bb_temp_out")
+        bb_flow_out_unit = bb16.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ev_bb_flow_out")
+
+        bb_u1, bb_u2, bb_u3 = st.columns(3)
+        bb_u_unit = bb_u1.selectbox("U unit", HTC_UNITS, index=0, key="ev_bb_u_unit")
+        bb_area_unit = bb_u2.selectbox("Area unit", AREA_UNITS, index=0, key="ev_bb_area_unit")
+        bb_bpe_unit = bb_u3.selectbox("BPE unit", DELTA_TEMPERATURE_UNITS, index=0, key="ev_bb_bpe_unit")
 
         st.markdown("**Per-effect configuration**")
         st.caption("Enter U and installed area for each body. U typically drops in later effects as liquor concentration and viscosity increase.")
@@ -3050,22 +3018,22 @@ def render_evaporators() -> None:
             with effect_cols[i]:
                 st.markdown(f"**Effect {i+1}**")
                 eff_u = st.number_input(
-                    f"Overall U (W/m²·K)", value=2500 - i * 400, min_value=200, key=f"ev_bb_u_{i}"
+                    f"Overall U ({bb_u_unit})", value=2500 - i * 400, min_value=200, key=f"ev_bb_u_{i}"
                 )
                 eff_a = st.number_input(
-                    f"Installed area (m²)", value=200.0 + i * 20, min_value=10, key=f"ev_bb_area_{i}"
+                    f"Installed area ({bb_area_unit})", value=200.0 + i * 20, min_value=10, key=f"ev_bb_area_{i}"
                 )
                 eff_bpe = st.number_input(
-                    f"BPE (°C)", value=3.0 + i * 3.0, min_value=0.0, key=f"ev_bb_bpe_{i}"
+                    f"BPE (°{bb_bpe_unit})", value=3.0 + i * 3.0, min_value=0.0, key=f"ev_bb_bpe_{i}"
                 )
                 bb_effect_configs.append(BodyByBodyEffectInput(
                     effect_number=i + 1,
-                    u_w_m2_k=eff_u,
-                    area_m2=eff_a,
-                    bpe_c=eff_bpe,
+                    u_w_m2_k=htc_to_w_m2k(eff_u, bb_u_unit),
+                    area_m2=area_to_m2(eff_a, bb_area_unit),
+                    bpe_c=delta_temperature_to_c(eff_bpe, bb_bpe_unit),
                 ))
 
-        bb_feed_temp_c = bb_feed_temp if bb_feed_temp_unit == "C" else (bb_feed_temp - 32.0) * 5.0 / 9.0
+        bb_feed_temp_c = temperature_to_c(bb_feed_temp, bb_feed_temp_unit)
         feed_config = BodyByBodyFeedConfig(
             feed_rate_kg_h=bb_feed_rate if bb_feed_rate_unit == "kg/h" else mass_flow_to_kg_h(bb_feed_rate, bb_feed_rate_unit),
             feed_solids_wt_pct=bb_feed_solids,
@@ -3082,7 +3050,7 @@ def render_evaporators() -> None:
                 steam_pressure_unit=bb_steam_pressure_unit,
                 last_effect_pressure_value=bb_last_effect_pressure,
                 last_effect_pressure_unit=bb_last_effect_pressure_unit,
-                estimated_specific_evaporation_duty_kj_kg=bb_duty_per_kg,
+                estimated_specific_evaporation_duty_kj_kg=specific_energy_to_kj_kg(bb_duty_per_kg, bb_spec_duty_unit),
             )
 
             x1, x2, x3, x4 = st.columns(4)
@@ -3101,8 +3069,8 @@ def render_evaporators() -> None:
                     "Effect": f"{eff.effect_number}",
                     f"Steam temp ({bb_temp_out_unit})": _display_temperature(eff.steam_temperature_c, bb_temp_out_unit),
                     f"Boiling temp ({bb_temp_out_unit})": _display_temperature(eff.boiling_temperature_c, bb_temp_out_unit),
-                    "BPE (°C)": eff.bpe_c,
-                    "Net ΔT (°C)": eff.net_delta_t_c,
+                    f"BPE (°{bb_bpe_unit})": c_to_delta_temperature(eff.bpe_c, bb_bpe_unit),
+                    f"Net ΔT (°{bb_temp_out_unit})": eff.net_delta_t_c * (1.8 if bb_temp_out_unit == 'F' else 1.0),
                     "Pressure (kPa abs)": eff.effect_pressure_kpa_abs,
                     f"Evap ({bb_feed_rate_unit})": kg_h_to_mass_flow(eff.evaporation_kg_h, bb_feed_rate_unit),
                     f"Cum. evap (kg/h)": eff.cumulative_evaporation_kg_h,
@@ -3111,9 +3079,9 @@ def render_evaporators() -> None:
                     f"Steam ({bb_feed_rate_unit})": kg_h_to_mass_flow(eff.steam_flow_kg_h, bb_feed_rate_unit),
                     "Sensible heat (kW)": eff.sensible_heat_kw,
                     "Duty (kW)": eff.duty_kw,
-                    "U (W/m²·K)": eff.u_w_m2_k,
-                    "Req. area (m²)": eff.required_area_m2,
-                    f"Inst. area (m²)": eff.u_w_m2_k * 0 + bb_effect_configs[eff.effect_number - 1].area_m2,
+                    f"U ({bb_u_unit})": w_m2k_to_htc(eff.u_w_m2_k, bb_u_unit),
+                    f"Req. area ({bb_area_unit})": m2_to_area(eff.required_area_m2, bb_area_unit),
+                    f"Inst. area ({bb_area_unit})": m2_to_area(bb_effect_configs[eff.effect_number - 1].area_m2, bb_area_unit),
                     "Area util.": eff.area_utilization,
                     f"Feed in ({bb_temp_out_unit})": _display_temperature(eff.feed_in_temperature_c, bb_temp_out_unit),
                 }
@@ -3123,9 +3091,9 @@ def render_evaporators() -> None:
 
             # Temperature profile
             eff_nums = [eff.effect_number for eff in bb_result.effects]
-            steam_temps = [eff.steam_temperature_c for eff in bb_result.effects]
-            boil_temps = [eff.boiling_temperature_c for eff in bb_result.effects]
-            feed_in_temps = [eff.feed_in_temperature_c for eff in bb_result.effects]
+            steam_temps = [_display_temperature(eff.steam_temperature_c, bb_temp_out_unit) for eff in bb_result.effects]
+            boil_temps = [_display_temperature(eff.boiling_temperature_c, bb_temp_out_unit) for eff in bb_result.effects]
+            feed_in_temps = [_display_temperature(eff.feed_in_temperature_c, bb_temp_out_unit) for eff in bb_result.effects]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=eff_nums, y=steam_temps, mode="lines+markers", name="Steam temp", line=dict(dash="dash")))
             fig.add_trace(go.Scatter(x=eff_nums, y=boil_temps, mode="lines+markers", name="Boiling temp"))
@@ -3133,7 +3101,7 @@ def render_evaporators() -> None:
             fig.update_layout(
                 title="Body-by-body temperature profile",
                 xaxis_title="Effect number",
-                yaxis_title="Temperature (°C)",
+                yaxis_title=f"Temperature (°{bb_temp_out_unit})",
                 xaxis=dict(tickmode="linear", dtick=1),
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -3155,14 +3123,14 @@ def render_evaporators() -> None:
 
             with z2:
                 fig_area = go.Figure()
-                inst_areas = [bb_effect_configs[eff.effect_number - 1].area_m2 for eff in bb_result.effects]
-                fig_area.add_trace(go.Bar(x=eff_nums, y=inst_areas, name="Installed area (m²)", width=0.3, offset=-0.25))
-                fig_area.add_trace(go.Bar(x=eff_nums, y=[eff.required_area_m2 for eff in bb_result.effects], name="Required area (m²)", width=0.3, offset=0.15))
+                inst_areas = [m2_to_area(bb_effect_configs[eff.effect_number - 1].area_m2, bb_area_unit) for eff in bb_result.effects]
+                fig_area.add_trace(go.Bar(x=eff_nums, y=inst_areas, name=f"Installed area ({bb_area_unit})", width=0.3, offset=-0.25))
+                fig_area.add_trace(go.Bar(x=eff_nums, y=[m2_to_area(eff.required_area_m2, bb_area_unit) for eff in bb_result.effects], name=f"Required area ({bb_area_unit})", width=0.3, offset=0.15))
                 fig_area.add_trace(go.Scatter(x=eff_nums, y=[eff.area_utilization for eff in bb_result.effects], mode="lines+markers", name="Area utilization", yaxis="y2"))
                 fig_area.update_layout(
                     title="Area comparison and utilization",
                     xaxis_title="Effect number",
-                    yaxis_title="Area (m²)",
+                    yaxis_title=f"Area ({bb_area_unit})",
                     xaxis=dict(tickmode="linear", dtick=1),
                 )
                 st.plotly_chart(fig_area, use_container_width=True)
@@ -3256,9 +3224,11 @@ def render_crystallizers() -> None:
         )
         yield_unit = d4.selectbox("Yield output unit", PERCENT_UNITS, index=0, key="cr_yield_out")
 
-        e1, e2 = st.columns(2)
-        crystal_density = e1.number_input("Crystal density (kg/m3)", value=1660.0, key="cr_crystal_density")
-        mother_liquor_density = e2.number_input("Mother liquor density (kg/m3)", value=1280.0, key="cr_ml_density")
+        e1, e2, e3, e4 = st.columns(4)
+        crystal_density = e1.number_input("Crystal density", value=1660.0, key="cr_crystal_density")
+        cr_density_unit = e2.selectbox("Density unit", DENSITY_UNITS, index=0, key="cr_density_unit")
+        mother_liquor_density = e3.number_input("Mother liquor density", value=1280.0, key="cr_ml_density")
+        _cr_ml_du = e4.caption(f"({cr_density_unit})")
 
         f1, f2 = st.columns(2)
         supersat_screen_band_pct = f1.number_input(
@@ -3291,8 +3261,8 @@ def render_crystallizers() -> None:
                 working_volume_unit=working_volume_unit,
                 operating_temperature_c=temp_c,
                 product=product,
-                crystal_density_kg_m3=crystal_density,
-                mother_liquor_density_kg_m3=mother_liquor_density,
+                crystal_density_kg_m3=density_to_kg_m3(crystal_density, cr_density_unit),
+                mother_liquor_density_kg_m3=density_to_kg_m3(mother_liquor_density, cr_density_unit),
                 target_crystal_volume_pct=target_crystal_volume_pct,
                 slurry_withdrawal_rate_value=slurry_withdrawal,
                 slurry_withdrawal_rate_unit=slurry_withdrawal_unit,
@@ -3368,18 +3338,23 @@ def render_crystallizers() -> None:
         mb_n_bodies = mb1.number_input("Number of bodies", min_value=2, max_value=6, value=3, step=1, key="mb_cr_n_bodies")
 
         mb_temps_label = st.caption("Set body temperatures (decreasing from first to last body for a cooling crystallizer):")
+        mb_temp_unit_col, _ = st.columns([1, 3])
+        mb_temp_unit = mb_temp_unit_col.selectbox("Body temp unit", TEMPERATURE_UNITS, index=0, key="mb_cr_temp_unit")
         temp_cols = st.columns(min(mb_n_bodies, 6))
         default_temps = [80.0, 60.0, 45.0, 35.0, 25.0, 20.0]
         mb_body_temps = []
         for i in range(int(mb_n_bodies)):
-            mb_body_temps.append(temp_cols[i].number_input(f"Body {i+1} temp (°C)", value=default_temps[i], key=f"mb_cr_body_temp_{i}"))
+            mb_body_temps.append(temp_cols[i].number_input(f"Body {i+1} temp", value=default_temps[i], key=f"mb_cr_body_temp_{i}"))
 
-        mb_vol_c1, mb_vol_c2 = st.columns(2)
-        mb_working_volume = mb_vol_c1.number_input("Working volume per body (m3)", value=18.0, key="mb_cr_working_vol")
-        mb_output_flow_unit = mb_vol_c2.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="mb_cr_flow_out")
+        mb_vol_c1, mb_vol_c2, mb_vol_c3 = st.columns(3)
+        mb_working_volume = mb_vol_c1.number_input("Working volume per body", value=18.0, key="mb_cr_working_vol")
+        mb_vol_unit = mb_vol_c2.selectbox("Volume unit", VOLUME_UNITS, index=0, key="mb_cr_vol_unit")
+        mb_output_flow_unit = mb_vol_c3.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="mb_cr_flow_out")
 
-        mb_crystal_density = st.number_input("Crystal density (kg/m3)", value=1660.0, key="mb_cr_crystal_density")
-        mb_ml_density = st.number_input("Mother liquor density (kg/m3)", value=1280.0, key="mb_cr_ml_density")
+        mb_d1, mb_d2, mb_d3 = st.columns(3)
+        mb_crystal_density = mb_d1.number_input("Crystal density", value=1660.0, key="mb_cr_crystal_density")
+        mb_density_unit = mb_d2.selectbox("Density unit", DENSITY_UNITS, index=0, key="mb_cr_density_unit")
+        mb_ml_density = mb_d3.number_input("Mother liquor density", value=1280.0, key="mb_cr_ml_density")
 
         mb_sec = st.checkbox("Include secondary feed points", value=False, help="Allow additional feed inlets at intermediate bodies.", key="mb_cr_sec_feed")
         if mb_sec:
@@ -3404,10 +3379,10 @@ def render_crystallizers() -> None:
                 feed_rate_unit=mb_feed_rate_unit,
                 feed_solids_wt_pct=mb_feed_solids,
                 n_bodies=int(mb_n_bodies),
-                body_temperatures_c=mb_body_temps,
-                working_volume_per_body_m3=mb_working_volume,
-                crystal_density_kg_m3=mb_crystal_density,
-                mother_liquor_density_kg_m3=mb_ml_density,
+                body_temperatures_c=[temperature_to_c(t, mb_temp_unit) for t in mb_body_temps],
+                working_volume_per_body_m3=volume_to_m3(mb_working_volume, mb_vol_unit),
+                crystal_density_kg_m3=density_to_kg_m3(mb_crystal_density, mb_density_unit),
+                mother_liquor_density_kg_m3=density_to_kg_m3(mb_ml_density, mb_density_unit),
                 include_secondary_feed_points=mb_sec,
                 secondary_feed_rates_value=mb_sec_rates if mb_sec and mb_sec_rates else None,
                 secondary_feed_solids_wt_pct=mb_sec_solids if mb_sec and mb_sec_solids else None,
@@ -3495,42 +3470,51 @@ def render_solubility_curve() -> None:
 
     with tabs[0]:
         st.subheader("Solubility Curve Viewer")
-        c1, c2, c3 = st.columns(3)
-        temp_min = c1.number_input("Minimum temperature (\u00b0C)", min_value=-10.0, max_value=80.0, value=0.0, key="sol_temp_min")
-        temp_max = c2.number_input("Maximum temperature (\u00b0C)", min_value=30.0, max_value=120.0, value=100.0, key="sol_temp_max")
-        num_pts = c3.slider("Number of curve points", min_value=10, max_value=200, value=50, key="sol_num_pts")
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+        sol_temp_unit = c1.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="sol_temp_unit")
+        _lo = c_to_temperature(-10.0, sol_temp_unit)
+        _hi80 = c_to_temperature(80.0, sol_temp_unit)
+        _hi120 = c_to_temperature(120.0, sol_temp_unit)
+        _lo30 = c_to_temperature(30.0, sol_temp_unit)
+        temp_min = c2.number_input(f"Min temp (°{sol_temp_unit})", min_value=_lo, max_value=_hi80, value=c_to_temperature(0.0, sol_temp_unit), key="sol_temp_min")
+        temp_max = c3.number_input(f"Max temp (°{sol_temp_unit})", min_value=_lo30, max_value=_hi120, value=c_to_temperature(100.0, sol_temp_unit), key="sol_temp_max")
+        num_pts = c4.slider("Number of curve points", min_value=10, max_value=200, value=50, key="sol_num_pts")
 
         d1, d2 = st.columns(2)
         fit_degree = d1.selectbox("Polynomial degree", [2, 3, 4, 5], index=2, key="sol_deg")
         y_unit = d2.selectbox("Y-axis unit", ["wt% solids", "g/100g water"], index=0, key="sol_yunit")
 
+        temp_min_c = temperature_to_c(temp_min, sol_temp_unit)
+        temp_max_c = temperature_to_c(temp_max, sol_temp_unit)
         fit = fit_solubility_polynomial(degree=fit_degree)
-        curve = generate_solubility_curve(temp_min=temp_min, temp_max=temp_max, num_points=num_pts, use_polynomial=True, include_raw_data=True)
+        curve = generate_solubility_curve(temp_min=temp_min_c, temp_max=temp_max_c, num_points=num_pts, use_polynomial=True, include_raw_data=True)
 
         col_r1, col_r2 = st.columns([1, 1])
         col_r1.metric(f"Polynomial fit (degree {fit_degree})", f"R\u00b2 = {fit.r_squared:.6f}")
         col_r2.metric(f"Fitting accuracy", f"Max error: {fit.max_error_wt_pct:.4f} wt%", help=f"Mean error: {fit.mean_error_wt_pct:.4f} wt%")
 
+        disp_temps = [c_to_temperature(t, sol_temp_unit) for t in curve["temperatures"]]
+        raw_disp_temps = [c_to_temperature(p.temperature_c, sol_temp_unit) for p in solubility_table_points()]
         fig = go.Figure()
         if y_unit == "wt% solids":
-            fig.add_trace(go.Scatter(x=curve["temperatures"], y=curve["solubility_wt_pct"],
+            fig.add_trace(go.Scatter(x=disp_temps, y=curve["solubility_wt_pct"],
                                      mode="lines", name=f"Degree {fit_degree} fit", line=dict(color="blue", width=2)))
-            fig.add_trace(go.Scatter(x=[p.temperature_c for p in solubility_table_points()],
+            fig.add_trace(go.Scatter(x=raw_disp_temps,
                                      y=[p.solubility_wt_pct for p in solubility_table_points()],
                                      mode="markers", name="Published data",
                                      marker=dict(color="red", size=8, symbol="x")))
             y_label = "Citric acid solubility (wt%)"
         else:
-            fig.add_trace(go.Scatter(x=curve["temperatures"], y=curve["solubility_g_per_100g"],
+            fig.add_trace(go.Scatter(x=disp_temps, y=curve["solubility_g_per_100g"],
                                      mode="lines", name=f"Degree {fit_degree} fit", line=dict(color="blue", width=2)))
-            fig.add_trace(go.Scatter(x=[p.temperature_c for p in solubility_table_points()],
+            fig.add_trace(go.Scatter(x=raw_disp_temps,
                                      y=[p.solubility_g_per_100g_water for p in solubility_table_points()],
                                      mode="markers", name="Published data",
                                      marker=dict(color="red", size=8, symbol="x")))
             y_label = "Citric acid solubility (g/100g water)"
 
         fig.update_layout(
-            xaxis_title="Temperature (\u00b0C)",
+            xaxis_title=f"Temperature (°{sol_temp_unit})",
             yaxis_title=y_label,
             hovermode="x unified",
             legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
@@ -3542,18 +3526,28 @@ def render_solubility_curve() -> None:
         st.subheader("Cooling Crystallizer Yield Sweep")
         st.caption("Sweep crystallizer yield across a temperature range to find optimal operating parameters.")
 
-        p1, p2, p3 = st.columns(3)
+        p1, p2, p3, p4, p5 = st.columns([1, 1, 1, 1, 1])
         feed_solids = p1.number_input("Feed solids (wt%)", min_value=1.0, max_value=85.0, value=60.0, key="ys_feed_solids")
-        feed_temp = p2.number_input("Feed temperature (\u00b0C)", min_value=10.0, max_value=100.0, value=70.0, key="ys_feed_temp")
-        feed_rate = p3.number_input("Feed rate (kg/h)", min_value=100.0, value=10000.0, step=100.0, key="ys_feed_rate")
+        ys_temp_unit = p2.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="ys_temp_unit")
+        _ys_lo = c_to_temperature(0.0, ys_temp_unit)
+        _ys_hi100 = c_to_temperature(100.0, ys_temp_unit)
+        _ys_hi80 = c_to_temperature(80.0, ys_temp_unit)
+        feed_temp = p3.number_input(f"Feed temp (°{ys_temp_unit})", min_value=c_to_temperature(10.0, ys_temp_unit), max_value=_ys_hi100, value=c_to_temperature(70.0, ys_temp_unit), key="ys_feed_temp")
+        feed_rate = p4.number_input("Feed rate", min_value=100.0, value=10000.0, step=100.0, key="ys_feed_rate")
+        ys_flow_unit = p5.selectbox("Feed flow unit", MASS_FLOW_UNITS, index=0, key="ys_flow_unit")
 
         q1, q2, q3, q4 = st.columns(4)
-        sweep_start = q1.number_input("Sweep start temp (\u00b0C)", min_value=0.0, max_value=100.0, value=70.0, key="ys_start")
-        sweep_end = q2.number_input("Sweep end temp (\u00b0C)", min_value=0.0, max_value=80.0, value=20.0, key="ys_end")
+        sweep_start = q1.number_input(f"Sweep start (°{ys_temp_unit})", min_value=_ys_lo, max_value=_ys_hi100, value=c_to_temperature(70.0, ys_temp_unit), key="ys_start")
+        sweep_end = q2.number_input(f"Sweep end (°{ys_temp_unit})", min_value=_ys_lo, max_value=_ys_hi80, value=c_to_temperature(20.0, ys_temp_unit), key="ys_end")
         meta_offset = q3.number_input("Metastable zone width (wt%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5, key="ys_meta")
         num_sweep_pts = q4.slider("Sweep points", min_value=5, max_value=50, value=20, key="ys_num_pts")
 
         flow_out_unit = st.selectbox("Output flow unit", MASS_FLOW_UNITS, index=0, key="ys_flow_out")
+
+        feed_temp_c = temperature_to_c(feed_temp, ys_temp_unit)
+        feed_rate_kg_h = mass_flow_to_kg_h(feed_rate, ys_flow_unit)
+        sweep_start_c = temperature_to_c(sweep_start, ys_temp_unit)
+        sweep_end_c = temperature_to_c(sweep_end, ys_temp_unit)
 
         if sweep_end >= sweep_start:
             st.warning("Sweep end temperature must be below start temperature for a cooling crystallizer.")
@@ -3561,10 +3555,10 @@ def render_solubility_curve() -> None:
             try:
                 sweep_result = predict_crystallizer_yield_sweep(
                     feed_solids_wt_pct=feed_solids,
-                    feed_temperature_c=feed_temp,
-                    sweep_start_c=sweep_start,
-                    sweep_end_c=sweep_end,
-                    feed_rate_kg_h=feed_rate,
+                    feed_temperature_c=feed_temp_c,
+                    sweep_start_c=sweep_start_c,
+                    sweep_end_c=sweep_end_c,
+                    feed_rate_kg_h=feed_rate_kg_h,
                     use_polynomial=True,
                     metastable_offset_wt_pct=meta_offset,
                     num_points=num_sweep_pts,
@@ -3572,23 +3566,24 @@ def render_solubility_curve() -> None:
 
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Max theoretical yield", f"{sweep_result.max_yield_fraction * 100:.1f}%")
-                m2.metric("at temperature", f"{sweep_result.optimal_temperature_c:.1f} \u00b0C")
+                m2.metric("at temperature", f"{c_to_temperature(sweep_result.optimal_temperature_c, ys_temp_unit):.1f} °{ys_temp_unit}")
                 optimal_crystals = sweep_result.points[-1]["crystals_kg_h"] if sweep_result.points else 0
                 m3.metric("Crystals at optimal",
                           f"{kg_h_to_mass_flow(optimal_crystals, flow_out_unit):,.0f} {flow_out_unit}")
                 m4.metric("Feed solids", f"{feed_solids:.1f} wt%")
 
                 sweep_df = pd.DataFrame(sweep_result.points)
+                sweep_df["temperature_disp"] = sweep_df["temperature_c"].apply(lambda t: c_to_temperature(t, ys_temp_unit))
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=sweep_df["temperature_c"], y=sweep_df["yield_pct"],
+                fig.add_trace(go.Scatter(x=sweep_df["temperature_disp"], y=sweep_df["yield_pct"],
                                          mode="lines+markers", name="Yield %", line=dict(color="green", width=2),
                                          marker=dict(size=6)))
-                fig.add_trace(go.Scatter(x=sweep_df["temperature_c"], y=sweep_df["crystals_kg_h"],
+                fig.add_trace(go.Scatter(x=sweep_df["temperature_disp"], y=sweep_df["crystals_kg_h"],
                                          mode="lines", name=f"Crystals ({flow_out_unit})",
                                          line=dict(color="blue", dash="dash"), yaxis="y2"))
                 fig.update_layout(
                     title="Crystallizer yield vs. operating temperature",
-                    xaxis_title="Temperature (\u00b0C)",
+                    xaxis_title=f"Temperature (°{ys_temp_unit})",
                     yaxis=dict(title="Yield (%)", side="left"),
                     yaxis2=dict(title=f"Crystals ({flow_out_unit})", side="right", overlaying="y"),
                     hovermode="x unified",
@@ -3606,12 +3601,14 @@ def render_solubility_curve() -> None:
         st.subheader("Metastable Zone Estimator")
         st.caption("Estimate the metastable zone boundaries for crystallizer operation planning.")
 
-        mz1, mz2 = st.columns(2)
-        meta_temp = mz1.number_input("Temperature (\u00b0C)", min_value=0.0, max_value=100.0, value=40.0, key="mz_temp")
-        meta_width = mz2.number_input("Metastable zone width (wt%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5, key="mz_width")
+        mz1, mz2, mz3 = st.columns(3)
+        mz_temp_unit = mz1.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="mz_temp_unit")
+        meta_temp = mz2.number_input(f"Temperature (°{mz_temp_unit})", min_value=c_to_temperature(0.0, mz_temp_unit), max_value=c_to_temperature(100.0, mz_temp_unit), value=c_to_temperature(40.0, mz_temp_unit), key="mz_temp")
+        meta_width = mz3.number_input("Metastable zone width (wt%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5, key="mz_width")
 
+        meta_temp_c = temperature_to_c(meta_temp, mz_temp_unit)
         try:
-            meta_result = estimate_metastable_zone(meta_temp, metastable_width_wt_pct=meta_width)
+            meta_result = estimate_metastable_zone(meta_temp_c, metastable_width_wt_pct=meta_width)
 
             r1, r2, r3 = st.columns(3)
             r1.metric("Equilibrium solubility", f"{meta_result.equilibrium_solids_wt_pct:.2f} wt%")
@@ -3631,7 +3628,7 @@ def render_solubility_curve() -> None:
             fig.add_hline(y=labile, line_dash="dot", line_color="red",
                           annotation_text=f"Labile ({labile:.2f} wt%)", annotation_position="bottom right")
             fig.update_layout(
-                title=f"Metastable zone diagram at {meta_temp} \u00b0C (width = {meta_width} wt%)",
+                title=f"Metastable zone diagram at {meta_temp:.1f} °{mz_temp_unit} (width = {meta_width} wt%)",
                 yaxis_title="Solids wt%",
                 yaxis_range=[0, max(labile + 10, 100)],
             )
@@ -3655,65 +3652,76 @@ def render_heat_exchangers() -> None:
         thot_out = c2.number_input("Hot-side outlet", value=45.0, key="hx_thot_out")
         tcold_in = c3.number_input("Cold-side inlet", value=25.0, key="hx_tcold_in")
         tcold_out = c4.number_input("Cold-side outlet", value=55.0, key="hx_tcold_out")
-        d1, d2 = st.columns(2)
-        duty_kw = d1.number_input("Heat duty (kW)", min_value=0.1, value=500.0, key="hx_duty")
-        assumed_u = d2.number_input("Assumed overall U (W/m²·K)", min_value=50.0, value=800.0, key="hx_u")
+        d1, d2, d3, d4 = st.columns(4)
+        duty_kw = d1.number_input("Heat duty", min_value=0.1, value=500.0, key="hx_duty")
+        duty_unit = d2.selectbox("Duty unit", POWER_UNITS, index=0, key="hx_duty_unit")
+        assumed_u = d3.number_input("Assumed overall U", min_value=50.0, value=800.0, key="hx_u")
+        u_unit = d4.selectbox("U unit", HTC_UNITS, index=0, key="hx_u_unit")
         e1, e2, e3, e4, e5 = st.columns(5)
         sp = int(e1.number_input("Shell passes", min_value=1, max_value=6, value=1, step=1, key="hx_sp"))
         tp = int(e2.number_input("Tube passes", min_value=1, max_value=12, value=2, step=1, key="hx_tp"))
-        inst_area = e3.number_input("Installed area (m², optional)", min_value=0.0, value=0.0, key="hx_inst_area")
+        inst_area = e3.number_input("Installed area (optional)", min_value=0.0, value=0.0, key="hx_inst_area")
         temp_unit = e4.selectbox("Temperature unit", TEMPERATURE_UNITS, index=0, key="hx_temp_unit")
-        area_unit = e5.selectbox("Area output unit", ("m²", "ft²"), index=0, key="hx_area_unit")
+        area_unit = e5.selectbox("Area unit", AREA_UNITS, index=0, key="hx_area_unit")
 
         try:
-            t_hi = thot_in if temp_unit == "C" else (thot_in - 32.0) * 5.0 / 9.0
-            t_ho = thot_out if temp_unit == "C" else (thot_out - 32.0) * 5.0 / 9.0
-            t_ci = tcold_in if temp_unit == "C" else (tcold_in - 32.0) * 5.0 / 9.0
-            t_co = tcold_out if temp_unit == "C" else (tcold_out - 32.0) * 5.0 / 9.0
-            inst = inst_area if inst_area > 0 else None
-            sizing = size_heat_exchanger(t_hi, t_ho, t_ci, t_co, duty_kw, assumed_u, sp, tp, inst)
+            t_hi = temperature_to_c(thot_in, temp_unit)
+            t_ho = temperature_to_c(thot_out, temp_unit)
+            t_ci = temperature_to_c(tcold_in, temp_unit)
+            t_co = temperature_to_c(tcold_out, temp_unit)
+            duty_canonical = power_to_kw(duty_kw, duty_unit)
+            u_canonical = htc_to_w_m2k(assumed_u, u_unit)
+            inst_m2 = area_to_m2(inst_area, area_unit) if inst_area > 0 else None
+            sizing = size_heat_exchanger(t_hi, t_ho, t_ci, t_co, duty_canonical, u_canonical, sp, tp, inst_m2)
             lmtd_c = sizing.lmtd_c
-            a_unit = area_unit
-            area_disp = sizing.required_area_m2 if a_unit == "m²" else sizing.required_area_m2 * 10.764
-            inst_disp = (inst if inst else 0.0) if a_unit == "m²" else (inst * 10.764 if inst else 0.0)
+            area_disp = m2_to_area(sizing.required_area_m2, area_unit)
+            inst_disp = m2_to_area(inst_m2, area_unit) if inst_m2 else 0.0
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("LMTD", f"{lmtd_c:.2f} °C")
             m2.metric("F-factor", f"{sizing.f_factor:.4f}")
             m3.metric("Corrected LMTD", f"{sizing.corrected_lmtd_c:.2f} °C")
-            m4.metric("Required area", f"{area_disp:.1f} {a_unit}")
-            if inst:
+            m4.metric("Required area", f"{area_disp:.1f} {area_unit}")
+            if inst_m2:
                 util = sizing.area_utilization_fraction
                 n1, n2 = st.columns(2)
-                n1.metric("Installed area", f"{inst_disp:.1f} {a_unit}")
+                n1.metric("Installed area", f"{inst_disp:.1f} {area_unit}")
                 n2.metric("Area utilization", f"{util*100:.1f}%" if util else "N/A")
                 if sizing.required_u_w_m2k > 0:
-                    st.metric(f"Required U if using all installed area", f"{sizing.required_u_w_m2k:,.0f} W/m²·K")
+                    st.metric(f"Required U if using all installed area", f"{w_m2k_to_htc(sizing.required_u_w_m2k, u_unit):,.0f} {u_unit}")
             _show_notes(sizing.notes)
             _remember_case("heat-exchangers-sizing", {
                 "thot_in": thot_in, "thot_out": thot_out,
                 "tcold_in": tcold_in, "tcold_out": tcold_out,
-                "duty_kw": duty_kw, "assumed_u": assumed_u,
-                "shell_passes": sp, "tube_passes": tp, "installed_area": inst_area,
+                "duty": duty_kw, "duty_unit": duty_unit,
+                "assumed_u": assumed_u, "u_unit": u_unit,
+                "shell_passes": sp, "tube_passes": tp,
+                "installed_area": inst_area, "area_unit": area_unit,
             }, {k: v for k, v in sizing.__dict__.items() if k != "notes"})
         except ValueError as exc:
             st.error(str(exc))
 
     with tabs[1]:
         st.caption("Compute LMTD from any four terminal temperatures. Optionally compute the F-factor for a multi-pass arrangement.")
-        l1, l2, l3, l4 = st.columns(4)
-        lt_hi = l1.number_input("Hot inlet °C", value=95.0, key="lx_hi")
-        lt_ho = l2.number_input("Hot outlet °C", value=45.0, key="lx_ho")
-        lt_ci = l3.number_input("Cold inlet °C", value=25.0, key="lx_ci")
-        lt_co = l4.number_input("Cold outlet °C", value=55.0, key="lx_co")
+        l1, l2, l3, l4, l_tu = st.columns(5)
+        lt_hi = l1.number_input("Hot inlet", value=95.0, key="lx_hi")
+        lt_ho = l2.number_input("Hot outlet", value=45.0, key="lx_ho")
+        lt_ci = l3.number_input("Cold inlet", value=25.0, key="lx_ci")
+        lt_co = l4.number_input("Cold outlet", value=55.0, key="lx_co")
+        lx_temp_unit = l_tu.selectbox("Temp unit", TEMPERATURE_UNITS, index=0, key="lx_temp_unit")
         l5, l6 = st.columns(2)
         l_flow = l5.selectbox("Flow arrangement", ["counter", "co-current"], index=0, key="lx_flow")
         l_sp = int(l6.number_input("Shell passes (0 = skip F-factor)", min_value=0, max_value=6, value=0, step=1, key="lx_sp"))
 
-        lmtd = calculate_lmtd(lt_hi, lt_ho, lt_ci, lt_co, l_flow)
+        lt_hi_c = temperature_to_c(lt_hi, lx_temp_unit)
+        lt_ho_c = temperature_to_c(lt_ho, lx_temp_unit)
+        lt_ci_c = temperature_to_c(lt_ci, lx_temp_unit)
+        lt_co_c = temperature_to_c(lt_co, lx_temp_unit)
+        lmtd = calculate_lmtd(lt_hi_c, lt_ho_c, lt_ci_c, lt_co_c, l_flow)
+        _dt_scale = 1.8 if lx_temp_unit == "F" else 1.0
         col1, col2 = st.columns(2)
-        col1.metric("ΔT₁", f"{lmtd.dt1:.2f} °C")
-        col2.metric("ΔT₂", f"{lmtd.dt2:.2f} °C")
-        st.metric("LMTD", f"{lmtd.lmtd:.2f} °C")
+        col1.metric("ΔT₁", f"{lmtd.dt1 * _dt_scale:.2f} °{lx_temp_unit}")
+        col2.metric("ΔT₂", f"{lmtd.dt2 * _dt_scale:.2f} °{lx_temp_unit}")
+        st.metric("LMTD", f"{lmtd.lmtd * _dt_scale:.2f} °{lx_temp_unit}")
         if lmtd.cross_warn:
             st.warning("Temperature cross — LMTD is undefined in this single-pass arrangement.")
         if lmtd.approach_warn:
@@ -3727,7 +3735,7 @@ def render_heat_exchangers() -> None:
                 r_val = (lt_hi - lt_ho) / (lt_co - lt_ci)
                 f = calculate_f_factor(p_val, r_val, l_sp, l_sp * 2)
                 st.metric("F-factor", f"{f.f_factor:.4f}")
-                st.metric("Corrected LMTD (F · LMTD)", f"{lmtd.lmtd * f.f_factor:.2f} °C")
+                st.metric("Corrected LMTD (F · LMTD)", f"{lmtd.lmtd * _dt_scale * f.f_factor:.2f} °{lx_temp_unit}")
                 if f.f_low_warn:
                     st.warning("F-factor below 0.75 — this pass arrangement is not recommended; consider adding shell passes.")
                 f1, f2 = st.columns(2)
@@ -3762,24 +3770,34 @@ def render_heat_exchangers() -> None:
 
     with tabs[3]:
         st.caption("Compare 1-2, 2-4, and 3-6 pass arrangements for a given duty to see the trade-off in F-factor and area.")
-        p1, p2, p3, p4 = st.columns(4)
+        p1, p2, p3, p4, p5 = st.columns(5)
         pt_hi = p1.number_input("Hot inlet", value=95.0, key="xp_hi")
         pt_ho = p2.number_input("Hot outlet", value=45.0, key="xp_ho")
         pt_ci = p3.number_input("Cold inlet", value=25.0, key="xp_ci")
         pt_co = p4.number_input("Cold outlet", value=55.0, key="xp_co")
-        q1, q2 = st.columns(2)
-        q_duty = q1.number_input("Duty (kW)", min_value=0.1, value=500.0, key="xp_duty")
-        q_u = q2.number_input("U (W/m²·K)", min_value=50.0, value=800.0, key="xp_u")
+        xp_temp_unit = p5.selectbox("Temp unit", TEMPERATURE_UNITS, index=0, key="xp_temp_unit")
+        q1, q2, q3, q4 = st.columns(4)
+        q_duty = q1.number_input("Duty", min_value=0.1, value=500.0, key="xp_duty")
+        xp_duty_unit = q2.selectbox("Duty unit", POWER_UNITS, index=0, key="xp_duty_unit")
+        q_u = q3.number_input("U", min_value=50.0, value=800.0, key="xp_u")
+        xp_u_unit = q4.selectbox("U unit", HTC_UNITS, index=0, key="xp_u_unit")
 
         try:
-            comparisons = compare_pass_arrangements(pt_hi, pt_ho, pt_ci, pt_co, q_duty, q_u)
+            xp_hi_c = temperature_to_c(pt_hi, xp_temp_unit)
+            xp_ho_c = temperature_to_c(pt_ho, xp_temp_unit)
+            xp_ci_c = temperature_to_c(pt_ci, xp_temp_unit)
+            xp_co_c = temperature_to_c(pt_co, xp_temp_unit)
+            xp_duty_kw = power_to_kw(q_duty, xp_duty_unit)
+            xp_u_wm2k = htc_to_w_m2k(q_u, xp_u_unit)
+            comparisons = compare_pass_arrangements(xp_hi_c, xp_ho_c, xp_ci_c, xp_co_c, xp_duty_kw, xp_u_wm2k)
+            xp_dt_scale = 1.8 if xp_temp_unit == "F" else 1.0
             rows = []
             for c in comparisons:
                 rows.append({
                     "Arrangement": f"{c.shell_passes}-{c.tube_passes}",
                     "F-factor": f"{c.f_factor:.4f}",
-                    "Corrected LMTD (°C)": f"{c.corrected_lmtd_c:.2f}",
-                    "Required area (m²)": f"{c.required_area_m2:.1f}",
+                    f"Corrected LMTD (°{xp_temp_unit})": f"{c.corrected_lmtd_c * xp_dt_scale:.2f}",
+                    f"Required area (m²)": f"{c.required_area_m2:.1f}",
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
             for c in comparisons:
@@ -3797,20 +3815,21 @@ def render_motors_drives() -> None:
 
     with tabs[0]:
         st.caption("Select a standard motor frame size from a shaft power requirement.")
-        m1, m2, m3, m4 = st.columns(4)
-        shaft_kw = m1.number_input("Shaft power (kW)", min_value=0.1, value=22.0, key="ms_shaft")
-        load_pct = m2.number_input("Expected load (%)", min_value=10.0, max_value=100.0, value=80.0, key="ms_load")
-        sf = m3.number_input("Service factor", min_value=1.0, max_value=1.5, value=1.15, step=0.05, key="ms_sf")
-        voltage = m4.number_input("Motor voltage (V, 3-phase)", min_value=200.0, value=480.0, step=10.0, key="ms_voltage")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        shaft_kw = m1.number_input("Shaft power", min_value=0.1, value=22.0, key="ms_shaft")
+        ms_power_unit = m2.selectbox("Power unit", POWER_UNITS, index=0, key="ms_power_unit")
+        load_pct = m3.number_input("Expected load (%)", min_value=10.0, max_value=100.0, value=80.0, key="ms_load")
+        sf = m4.number_input("Service factor", min_value=1.0, max_value=1.5, value=1.15, step=0.05, key="ms_sf")
+        voltage = m5.number_input("Motor voltage (V)", min_value=200.0, value=480.0, step=10.0, key="ms_voltage")
         s1, s2 = st.columns(2)
         standard = s1.selectbox("Motor standard", ["IEC", "NEMA"], index=0, key="ms_standard")
         std_lower = standard.lower()
         try:
-            result = calculate_motor_size(shaft_kw, load_pct, sf, voltage, std_lower)
+            result = calculate_motor_size(power_to_kw(shaft_kw, ms_power_unit), load_pct, sf, voltage, std_lower)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Recommended motor", f"{result.next_standard_motor_kw:.1f} kW ({result.next_standard_motor_kw/0.7457:.0f} HP)")
+            c1.metric("Recommended motor", f"{kw_to_power(result.next_standard_motor_kw, ms_power_unit):.1f} {ms_power_unit}")
             c2.metric("Motor loading", f"{result.loading_pct:.1f}%")
-            c3.metric("Electrical input", f"{result.electrical_input_kw:.1f} kW")
+            c3.metric("Electrical input", f"{kw_to_power(result.electrical_input_kw, ms_power_unit):.1f} {ms_power_unit}")
             c4.metric("Estimated eff.", f"{result.motor_efficiency_pct:.1f}%")
             e1, e2, e3 = st.columns(3)
             e1.metric("Power factor", f"{result.pf:.3f}")
@@ -3826,15 +3845,17 @@ def render_motors_drives() -> None:
 
     with tabs[1]:
         st.caption("Estimate motor power from pump flow, head, and efficiency.")
-        p1, p2, p3, p4 = st.columns(4)
-        flow = p1.number_input("Flow (m³/h)", min_value=0.01, value=50.0, key="pm_flow")
-        head = p2.number_input("Head (m)", min_value=0.1, value=30.0, key="pm_head")
-        sg = p3.number_input("Specific gravity", min_value=0.5, max_value=2.0, value=1.0, step=0.05, key="pm_sg")
-        pump_eff = p4.number_input("Pump efficiency (%)", min_value=30.0, max_value=95.0, value=75.0, key="pm_eff")
+        p1, p2, p3, p4, p5, p6 = st.columns(6)
+        flow = p1.number_input("Flow", min_value=0.01, value=50.0, key="pm_flow")
+        pm_flow_unit = p2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="pm_flow_unit")
+        head = p3.number_input("Head", min_value=0.1, value=30.0, key="pm_head")
+        pm_head_unit = p4.selectbox("Head unit", LENGTH_UNITS, index=0, key="pm_head_unit")
+        sg = p5.number_input("Specific gravity", min_value=0.5, max_value=2.0, value=1.0, step=0.05, key="pm_sg")
+        pump_eff = p6.number_input("Pump eff. (%)", min_value=30.0, max_value=95.0, value=75.0, key="pm_eff")
         motor_eff_input = st.number_input("Motor efficiency (%) — leave 0 to auto-estimate", min_value=0.0, max_value=100.0, value=0.0, key="pm_motor_eff")
         motor_eff_val = motor_eff_input if motor_eff_input > 0 else None
         try:
-            result = calculate_pump_motor(flow, head, sg, pump_eff, motor_eff_val)
+            result = calculate_pump_motor(volumetric_flow_to_m3_h(flow, pm_flow_unit), length_to_m(head, pm_head_unit), sg, pump_eff, motor_eff_val)
             c1, c2, c3 = st.columns(3)
             c1.metric("Hydraulic power", f"{result.hydraulic_kw:.1f} kW")
             c2.metric("Shaft power", f"{result.shaft_power_kw:.1f} kW")
@@ -3846,23 +3867,24 @@ def render_motors_drives() -> None:
 
     with tabs[2]:
         st.caption("Estimate kWh and cost savings when replacing throttle/bypass control with a VFD at reduced speed.")
-        v1, v2, v3, v4 = st.columns(4)
-        rated_kw = v1.number_input("Motor rated power (kW)", min_value=0.1, value=37.0, key="vfd_rated")
-        speed_pct = v2.number_input("Operating speed (%)", min_value=20.0, max_value=100.0, value=70.0, key="vfd_speed")
-        ctrl_method = v3.selectbox("Current control method", ["Throttle", "Bypass", "Generic"], index=0, key="vfd_ctrl")
-        annual_hrs = v4.number_input("Annual operating hours", min_value=100.0, max_value=8760.0, value=8000.0, key="vfd_hrs")
+        v1, v2, v3, v4, v5 = st.columns(5)
+        rated_kw = v1.number_input("Motor rated power", min_value=0.1, value=37.0, key="vfd_rated")
+        vfd_power_unit = v2.selectbox("Power unit", POWER_UNITS, index=0, key="vfd_power_unit")
+        speed_pct = v3.number_input("Operating speed (%)", min_value=20.0, max_value=100.0, value=70.0, key="vfd_speed")
+        ctrl_method = v4.selectbox("Current control method", ["Throttle", "Bypass", "Generic"], index=0, key="vfd_ctrl")
+        annual_hrs = v5.number_input("Annual hours", min_value=100.0, max_value=8760.0, value=8000.0, key="vfd_hrs")
         v5, v6 = st.columns(2)
         elec_rate = v5.number_input("Electricity rate ($/kWh)", min_value=0.01, value=0.10, step=0.01, key="vfd_rate")
         drive_eff = v6.number_input("Drive+motor combined efficiency", min_value=0.7, max_value=0.99, value=0.87, step=0.01, key="vfd_drive_eff")
 
         try:
             result = estimate_vfd_savings(
-                rated_kw, speed_pct, ctrl_method.lower().replace(" ", "_"), annual_hrs, elec_rate
+                power_to_kw(rated_kw, vfd_power_unit), speed_pct, ctrl_method.lower().replace(" ", "_"), annual_hrs, elec_rate
             )
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("VFD input at speed", f"{result.estimated_vfd_input_kw:.1f} kW")
-            c2.metric(f"Current input ({result.current_control_method})", f"{result.current_input_kw:.1f} kW")
-            c3.metric("Savings", f"{result.estimated_savings_kw:.1f} kW")
+            c1.metric("VFD input at speed", f"{kw_to_power(result.estimated_vfd_input_kw, vfd_power_unit):.1f} {vfd_power_unit}")
+            c2.metric(f"Current input ({result.current_control_method})", f"{kw_to_power(result.current_input_kw, vfd_power_unit):.1f} {vfd_power_unit}")
+            c3.metric("Savings", f"{kw_to_power(result.estimated_savings_kw, vfd_power_unit):.1f} {vfd_power_unit}")
             c4.metric("Annual savings", f"{result.estimated_annual_savings_kwh:,.0f} kWh")
             s1, s2, s3 = st.columns(3)
             s1.metric("Annual cost savings", f"${result.estimated_annual_cost_savings:,.2f}")
@@ -3878,18 +3900,19 @@ def render_motors_drives() -> None:
 
     with tabs[3]:
         st.caption("Quick motor loading health check from nameplate rating and measured electrical input.")
-        h1, h2, h3, h4 = st.columns(4)
-        motor_rated = h1.number_input("Motor nameplate (kW)", min_value=0.1, value=37.0, key="mh_rated")
-        measured = h2.number_input("Measured input (kW)", min_value=0.0, value=30.0, key="mh_measured")
-        mot_eff = h3.number_input("Motor efficiency (%)", min_value=50.0, max_value=99.0, value=90.0, key="mh_eff")
-        elec_rate = h4.number_input("Electricity rate ($/kWh)", min_value=0.01, value=0.10, step=0.01, key="mh_rate")
+        h1, h2, h3, h4, h5 = st.columns(5)
+        motor_rated = h1.number_input("Motor nameplate", min_value=0.1, value=37.0, key="mh_rated")
+        mh_power_unit = h2.selectbox("Power unit", POWER_UNITS, index=0, key="mh_power_unit")
+        measured = h3.number_input("Measured input", min_value=0.0, value=30.0, key="mh_measured")
+        mot_eff = h4.number_input("Motor eff. (%)", min_value=50.0, max_value=99.0, value=90.0, key="mh_eff")
+        elec_rate = h5.number_input("Elec rate ($/kWh)", min_value=0.01, value=0.10, step=0.01, key="mh_rate")
         ahrs = st.number_input("Annual operating hours", min_value=100.0, max_value=8760.0, value=8000.0, key="mh_hrs")
         try:
-            result = assess_motor_loading(motor_rated, measured, mot_eff, elec_rate, ahrs)
+            result = assess_motor_loading(power_to_kw(motor_rated, mh_power_unit), power_to_kw(measured, mh_power_unit), mot_eff, elec_rate, ahrs)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Motor nameplate", f"{result.motor_rated_kw:.1f} kW")
-            c2.metric("Measured input", f"{result.measured_input_kw:.1f} kW")
-            c3.metric("Est. shaft power", f"{result.estimated_shaft_kw:.1f} kW")
+            c1.metric("Motor nameplate", f"{kw_to_power(result.motor_rated_kw, mh_power_unit):.1f} {mh_power_unit}")
+            c2.metric("Measured input", f"{kw_to_power(result.measured_input_kw, mh_power_unit):.1f} {mh_power_unit}")
+            c3.metric("Est. shaft power", f"{kw_to_power(result.estimated_shaft_kw, mh_power_unit):.1f} {mh_power_unit}")
             c4.metric("Loading", f"{result.load_factor_pct:.0f}%")
             s1, s2, s3 = st.columns(3)
             status = "OVERLOADED" if result.is_undersized else ("LIGHTLY LOADED" if result.is_oversized else "OK")
@@ -3977,64 +4000,116 @@ def render_case_manager() -> None:
         st.info("No saved cases yet.")
 
 
-
-def render_roadmap() -> None:
-    st.header("Roadmap")
-    st.caption("Completed lines are struck through. Active items are marked in progress.")
-
-    st.subheader("Completed foundations")
-    _render_status_lines([
-        ("done", "Fresh engineering_app project scaffolded and placed under Documents/projects"),
-        ("done", "Streamlit browser shell established"),
-        ("done", "Per-input and per-output unit handling added across engineering pages"),
-        ("done", "Workbook upload and inspection workflow added"),
-        ("done", "Case manager added"),
-        ("done", "Solution BPE tools added for citric, fructose, dextrose, and sucrose"),
-        ("done", "Hydraulics core expanded with schedule 10S sizing, valves/fittings, TDH, pump power, NPSHa, segmented systems, control valves, pump/system curve, branch screens, and vessel head tools"),
-        ("done", "Hydraulics pump curve library/upload added for system-curve matching"),
-        ("done", "Citric crystallizer slurry basis updated to use crystal vol% plus solubility-based mother liquor and supersaturation screening"),
-        ("done", "Quick tools expanded with blending, Brix reconciliation, tank inventory, utility cost screens, and current-vs-proposed utility deltas"),
-    ])
-
-    st.subheader("Active work")
-    _render_status_lines([
-        ("done", "Citric crystallizer: multi-body capacity screening with explicit feed/withdrawal balance"),
-        ("done", "Evaporator fouling/NCG allowance screening with U-degradation and delta-T penalty"),
-        ("done", "Pump hydraulics BEP proximity and instrument-bias screening"),
-        ("done", "Solution BPE: >60 DS citric refined with continuous quadratic fit to 15-60 wt% table (R² > 0.99999)"),
-        ("done", "Evaporators: body-by-body staging with per-effect U, area, flow direction, and sensible-heat balance"),
-        ("done", "Steam jets: vendor presets with visible mapping preview, reference cards, and auto-seeded column selectors"),
-    ])
-
-    st.subheader("Next queued additions")
-    _render_status_lines([
-        ("done", "Heat Exchangers: LMTD calculator with F-factor, UA screening, and pass arrangement comparison"),
-        ("done", "Motors & Drives: motor sizing, pump motor power, VFD savings, and loading health checks"),
-        ("done", "Evaporators: multi-effect staging (1-6 effects) with forward-feed temperature profiles, per-effect BPE, intermediate pressure estimation, and steam economy screening"),
-        ("done", "Evaporators: add fouling and NCG allowance screening for U-degradation and ΔT-penalty"),
-        ("todo", "Solution BPE: refine >60 DS citric estimation with stronger literature-backed correlation"),
-        ("done", "Steam jets: import workbook-derived curve families and compare multiple models side-by-side"),
-        ("done", "Steam jets: add workbook preview auto-normalization and family / motive-basis filtering for imported curve families"),
-        ("done", "Hydraulics: add pump curve affinity / rerate screening from speed or impeller changes"),
-        ("done", "Hydraulics: add suction vessel + NPSHa scenario with optional NPSHr margin screening"),
-        ("done", "Hydraulics: add pump field troubleshooting check for suction/discharge gauge-based developed head and expected-TDH comparison"),
-        ("done", "Hydraulics: add current-vs-baseline pump case comparison and measured-vs-curve mismatch diagnosis"),
-        ("done", "Crystallizers: add metastable-zone and supersaturation screening on top of citric solubility-based slurry"),
-        ("done", "Hydraulics: add balancing-valve/orifice coefficient sizing from parallel branch split checks"),
-        ("done", "Evaporators: add design-calibrated U·A·ΔT capacity mode for existing bodies"),
-        ("done", "Quick tools: add ratio-target blend solving for operator-driven stream targeting"),
-        ("done", "Evaporators: body-by-body staging with per-effect U/area, feed preheat, forward/backward flow direction, sensible-heat tracking, and area utilization"),
-        ("done", "Steam jets: vendor presets with visible mapping preview, reference cards, and auto-seeded column selectors"),
-    ])
-
-    st.info("The hourly review job is set up to keep pushing this roadmap forward with practical improvements and internet research when useful.")
-
+def render_steam_cost_comparison() -> None:
+    """Steam cost comparison for current vs proposed utility optimization."""
+    st.header("Steam Cost Comparison")
+    st.markdown("Compare current steam usage against proposed improvements to estimate annual savings.")
+    
+    # Current case inputs
+    st.subheader("Current Case")
+    current_steam_flow = st.number_input(
+        "Current steam flow", 
+        value=5000.0,
+        help="Steam flow rate for current operation"
+    )
+    current_steam_flow_unit = st.selectbox(
+        "Flow unit",
+        ["kg/h", "t/h", "lb/h", "ton/h"],
+        index=0
+    )
+    
+    # Proposed case inputs
+    st.subheader("Proposed Case")
+    proposed_steam_flow = st.number_input(
+        "Proposed steam flow", 
+        value=4500.0,
+        help="Steam flow rate after improvements"
+    )
+    proposed_steam_flow_unit = st.selectbox(
+        "Flow unit",
+        ["kg/h", "t/h", "lb/h", "ton/h"],
+        index=0
+    )
+    
+    # Common inputs
+    st.subheader("Cost Parameters")
+    steam_cost_value = st.number_input(
+        "Steam cost",
+        value=10.0,
+        help="Cost per unit of steam"
+    )
+    steam_cost_basis = st.selectbox(
+        "Cost basis",
+        ["$/kg", "$/1000 kg", "$/lb", "$/1000 lb", "$/t", "$/metric ton"],
+        index=0
+    )
+    operating_hours_per_day = st.number_input(
+        "Operating hours per day",
+        value=24.0,
+        min_value=0.0,
+        max_value=24.0,
+        help="Hours of operation per day"
+    )
+    operating_days_per_year = st.number_input(
+        "Operating days per year",
+        value=365.0,
+        min_value=0.0,
+        max_value=366.0,
+        help="Days of operation per year"
+    )
+    
+    # Calculate button
+    if st.button("Calculate Savings"):
+        try:
+            from engineering_app.core.steam import compare_steam_costs
+            
+            result = compare_steam_costs(
+                current_steam_flow_value=current_steam_flow,
+                proposed_steam_flow_value=proposed_steam_flow,
+                steam_flow_unit=current_steam_flow_unit,
+                steam_cost_value=steam_cost_value,
+                steam_cost_basis=steam_cost_basis,
+                operating_hours_per_day=operating_hours_per_day,
+                operating_days_per_year=operating_days_per_year,
+            )
+            
+            st.subheader("Results")
+            
+            # Current case summary
+            st.markdown("## Current Case")
+            st.metric("Hourly Cost", f"${result.current.hourly_cost:.2f}")
+            st.metric("Daily Cost", f"${result.current.daily_cost:.2f}")
+            st.metric("Annual Cost", f"${result.current.annual_cost:.2f}")
+            st.metric("Daily Steam", f"{result.current.daily_steam_consumption_kg:.0f} kg")
+            st.metric("Annual Steam", f"{result.current.annual_steam_consumption_kg:.0f} kg")
+            
+            # Proposed case summary
+            st.markdown("## Proposed Case")
+            st.metric("Hourly Cost", f"${result.proposed.hourly_cost:.2f}")
+            st.metric("Daily Cost", f"${result.proposed.daily_cost:.2f}")
+            st.metric("Annual Cost", f"${result.proposed.annual_cost:.2f}")
+            st.metric("Daily Steam", f"{result.proposed.daily_steam_consumption_kg:.0f} kg")
+            st.metric("Annual Steam", f"{result.proposed.annual_steam_consumption_kg:.0f} kg")
+            
+            # Delta summary
+            st.markdown("## Savings Summary")
+            st.metric("Hourly Savings", f"${result.hourly_cost_savings:.2f}")
+            st.metric("Daily Savings", f"${result.daily_cost_delta:.2f}")
+            st.metric("Annual Savings", f"${result.annual_cost_savings:.2f}")
+            st.metric("Annual Steam Savings", f"{result.annual_steam_savings_kg:.0f} kg")
+            
+            # Notes
+            if result.notes:
+                st.markdown("## Notes")
+                for note in result.notes:
+                    st.info(note)
+            
+        except Exception as exc:
+            st.error(f"Calculation error: {str(exc)}")
 
 PAGES = {
-    "Dashboard": render_dashboard,
-    "Roadmap": render_roadmap,
-    "Quick Tools": render_quick_tools,
     "Solution BPE": render_solution_bpe,
+    "Quick Tools": render_quick_tools,
     "Hydraulics": render_hydraulics,
     "Heat Exchangers": render_heat_exchangers,
     "Steam Jets": render_steam_jets,
@@ -4044,12 +4119,19 @@ PAGES = {
     "Solubility Curve": render_solubility_curve,
     "Motors & Drives": render_motors_drives,
     "Workbook Import": render_workbook_import,
+    "Steam Cost Comparison": render_steam_cost_comparison,
     "Case Manager": render_case_manager,
 }
 
-with st.sidebar:
-    st.title("Engineering App")
-    page = st.radio("Section", list(PAGES.keys()))
-    st.caption("Browser shell for plant engineering workflows.")
+def main():
+    """Main entry point for the Streamlit engineering app."""
+    with st.sidebar:
+        st.title("Engineering App")
+        page = st.radio("Section", list(PAGES.keys()))
+        st.caption("Browser shell for plant engineering workflows.")
+        
+    # Render the selected page
+    PAGES[page]()
 
-PAGES[page]()
+if __name__ == "__main__":
+    main()

@@ -261,6 +261,42 @@ def tank_inventory(
     )
 
 
+
+def pump_power_tool(**kwargs):
+    """Calculate pump power requirements."""
+    return pump_power(PumpInputs(**kwargs))
+
+
+
+def pump_affinity_flow(q1: float, n1: float, n2: float) -> float:
+    """Calculate flow at new speed using affinity laws."""
+    return affinity_law_flow(q1, n1, n2)
+
+
+
+def pump_affinity_head(h1: float, n1: float, n2: float) -> float:
+    """Calculate head at new speed using affinity laws."""
+    return affinity_law_head(h1, n1, n2)
+
+
+
+def pump_affinity_power(p1: float, n1: float, n2: float) -> float:
+    """Calculate power at new speed using affinity laws."""
+    return affinity_law_power(p1, n1, n2)
+
+
+
+def pump_suction_specific_speed(n: float, q: float, npsh: float) -> float:
+    """Calculate suction specific speed."""
+    return suction_specific_speed(n, q, npsh)
+
+
+
+def pump_specific_speed(n: float, q: float, h: float) -> float:
+    """Calculate specific speed."""
+    return specific_speed(n, q, h)
+
+
 __all__ = [
     "pressure_conversion",
     "thermal_point",
@@ -283,4 +319,10 @@ __all__ = [
     "f_to_c",
     "kg_h_to_mass_flow",
     "m3_h_to_volumetric_flow",
+    "pump_power_tool",
+    "pump_affinity_flow",
+    "pump_affinity_head",
+    "pump_affinity_power",
+    "pump_suction_specific_speed",
+    "pump_specific_speed",
 ]

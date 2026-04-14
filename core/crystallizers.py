@@ -419,7 +419,7 @@ def estimate_multi_body_crystallizer(
     if total_vol > 0 and feed_rate_kg_h + total_sec_feed_kg_h > 1e-9:
         total_residence = total_vol * (inputs.crystal_density_kg_m3 + inputs.mother_liquor_density_kg_m3) / 2 / max(feed_rate_kg_h + total_sec_feed_kg_h, 1e-9)
 
-    overall_yield = total_crystals / max(total_feed_solids_kg_h, 1e-9)
+    overall_yield = cumulative_crystals / max(total_feed_solids_kg_h, 1e-9)
 
     notes = [
         f"Multi-body cooling crystallizer screening feed model for {n} effects.",

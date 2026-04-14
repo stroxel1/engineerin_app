@@ -5,10 +5,23 @@ __pycache__/
 venv/
 .env
 .env.*
-.streamlit/
 .pytest_cache/
 .DS_Store
 *.xlsx
 *.xlsm
 *.tmp
 data/cases_test/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+rthook_pandas.py
+launcher.py
+
+# Backup files
+*.bak
+*.backup
+
+# OS files
+Thumbs.db

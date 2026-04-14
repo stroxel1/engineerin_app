@@ -43,10 +43,13 @@ LENGTH_UNITS = ("m", "ft", "mm", "in")
 VOLUME_UNITS = ("m3", "L", "gal", "ft3")
 DENSITY_UNITS = ("kg/m3", "lb/ft3", "sg")
 VISCOSITY_UNITS = ("cP", "Pa·s")
-POWER_UNITS = ("kW", "BTU/h", "MMBTU/h")
+POWER_UNITS = ("kW", "BTU/h", "MMBTU/h", "hp")
 VELOCITY_UNITS = ("m/s", "ft/s")
 TIME_UNITS = ("s", "min", "h")
 PERCENT_UNITS = ("%", "fraction")
+AREA_UNITS = ("m²", "ft²")
+HTC_UNITS = ("W/m²·K", "BTU/h·ft²·°F")
+SPECIFIC_ENERGY_UNITS = ("kJ/kg", "BTU/lb")
 
 
 def c_to_f(value_c: float) -> float:
@@ -323,6 +326,8 @@ def kw_to_power(value_kw: float, unit: str) -> float:
         return value_kw * 3412.141633
     if u == "mmbtu/h":
         return value_kw * 0.003412141633
+    if u == "hp":
+        return value_kw * 1.341022089595
     raise ValueError(f"Unsupported power unit: {unit}")
 
 
@@ -334,6 +339,8 @@ def power_to_kw(value: float, unit: str) -> float:
         return value / 3412.141633
     if u == "mmbtu/h":
         return value / 0.003412141633
+    if u == "hp":
+        return value / 1.341022089595
     raise ValueError(f"Unsupported power unit: {unit}")
 
 
@@ -383,4 +390,82 @@ def fraction_to_percent(value_fraction: float, unit: str) -> float:
         return value_fraction * 100.0
     if u == "fraction":
         return value_fraction
+def fraction_to_percent(value_fraction: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "%":
+        return value_fraction * 100.0
+    if u == "fraction":
+        return value_fraction
+    if u == "hp":
+        return value_fraction * 1.341022089595
     raise ValueError(f"Unsupported percent unit: {unit}")
+
+
+# --- Area conversions ---
+
+_M2_PER_FT2 = 0.09290304
+
+
+def area_to_m2(value: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "m²":
+        return value
+    if u == "ft²":
+        return value * _M2_PER_FT2
+    raise ValueError(f"Unsupported area unit: {unit}")
+
+
+def m2_to_area(value_m2: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "m²":
+        return value_m2
+    if u == "ft²":
+        return value_m2 / _M2_PER_FT2
+    raise ValueError(f"Unsupported area unit: {unit}")
+
+
+# --- Heat-transfer coefficient conversions ---
+
+_HTC_BTU = 5.678263337  # 1 BTU/h·ft²·°F = 5.678… W/m²·K
+
+
+def htc_to_w_m2k(value: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "W/m²·K":
+        return value
+    if u == "BTU/h·ft²·°F":
+        return value * _HTC_BTU
+    raise ValueError(f"Unsupported HTC unit: {unit}")
+
+
+def w_m2k_to_htc(value_w: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "W/m²·K":
+        return value_w
+    if u == "BTU/h·ft²·°F":
+        return value_w / _HTC_BTU
+    raise ValueError(f"Unsupported HTC unit: {unit}")
+
+
+# --- Specific energy conversions ---
+
+_KJ_PER_BTU = 1.05505585262
+_LB_PER_KG = 2.20462262185
+
+
+def specific_energy_to_kj_kg(value: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "kJ/kg":
+        return value
+    if u == "BTU/lb":
+        return value * _KJ_PER_BTU * _LB_PER_KG
+    raise ValueError(f"Unsupported specific-energy unit: {unit}")
+
+
+def kj_kg_to_specific_energy(value_kj: float, unit: str) -> float:
+    u = unit.strip()
+    if u == "kJ/kg":
+        return value_kj
+    if u == "BTU/lb":
+        return value_kj / (_KJ_PER_BTU * _LB_PER_KG)
+    raise ValueError(f"Unsupported specific-energy unit: {unit}")

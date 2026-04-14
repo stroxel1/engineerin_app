@@ -37,23 +37,25 @@ A practical process-engineering application for day-to-day plant work, focused o
 - `data/cases/` — saved engineering cases
 
 ## Install
-From the parent directory:
 
 ```bash
-cd /Users/stephentroxel/Documents/projects
-python3 -m pip install -e engineering_app
+pip install -r requirements.txt
 ```
 
-## Run the browser app
-From the parent directory:
+## Run locally
 
 ```bash
-cd /Users/stephentroxel/Documents/projects
-PYTHONPATH=. streamlit run engineering_app/web_app.py
+streamlit run web_app_new.py
 ```
 
-Default URL:
-- http://localhost:8501
+Default URL: http://localhost:8501
+
+## Deploy to Streamlit Community Cloud
+1. Push this repo to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io).
+3. Click **New app** → select this repo.
+4. Set **Main file path** to `web_app_new.py`.
+5. Click **Deploy**.
 
 ## Working browser sections
 - Dashboard
