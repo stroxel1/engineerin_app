@@ -42,6 +42,7 @@ VOLUMETRIC_FLOW_UNITS = ("m3/h", "m3/min", "gpm", "L/min")
 LENGTH_UNITS = ("m", "ft", "mm", "in")
 VOLUME_UNITS = ("m3", "L", "gal", "ft3")
 DENSITY_UNITS = ("kg/m3", "lb/ft3", "sg")
+ML_DENSITY_UNITS = ("kg/m3", "lb/ft3", "sg", "DS%")
 VISCOSITY_UNITS = ("cP", "Pa·s")
 POWER_UNITS = ("kW", "BTU/h", "MMBTU/h", "hp")
 VELOCITY_UNITS = ("m/s", "ft/s")
@@ -298,6 +299,23 @@ def kg_m3_to_density(value_kg_m3: float, unit: str) -> float:
     if u == "sg":
         return value_kg_m3 / 1000.0
     raise ValueError(f"Unsupported density unit: {unit}")
+
+
+def ml_density_to_kg_m3(value: float, unit: str, temperature_c: float = 40.0) -> float:
+    """Convert a mother-liquor density input to kg/m³.
+
+    Accepts all standard density units plus ``DS%`` which estimates
+    density from dissolved-solids weight-percent using the citric-acid
+    correlation (998 + 8.2·DS + 0.025·DS² − 0.35·ΔT).
+    """
+    u = unit.strip().lower()
+    if u in {"ds%", "ds %"}:
+        ds = max(value, 0.0)
+        return max(
+            998.0 + 8.2 * ds + 0.025 * ds * ds - 0.35 * max(temperature_c - 20.0, 0.0),
+            900.0,
+        )
+    return density_to_kg_m3(value, unit)
 
 
 def viscosity_to_cp(value: float, unit: str) -> float:
