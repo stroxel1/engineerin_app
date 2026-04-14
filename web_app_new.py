@@ -2106,7 +2106,12 @@ def render_steam_jets() -> None:
         curve_name = c1.text_input("Curve name", value="Thermo-compressor A", key="sj_curve_name")
         x_col = c2.selectbox("X column", list(edited.columns), index=0, key="sj_xcol")
         y_col = c3.selectbox("Y column", list(edited.columns), index=1 if len(edited.columns) > 1 else 0, key="sj_ycol")
-        family = c4.text_input("Family / motive basis", value="Motive 3.5 barg", key="sj_family")
+        family = c4.text_input(
+            "Curve label (optional)",
+            value="",
+            key="sj_family",
+            help="Optional tag for this curve, e.g. the motive-steam pressure the vendor curve is based on. Used only for labelling saved cases — does not affect calculations.",
+        )
         operating_x = st.number_input("Operating x-value", value=5000.0, key="sj_x")
         actual_y = st.number_input("Actual y-value", value=6200.0, key="sj_y")
         rows = edited.to_dict(orient="records")
