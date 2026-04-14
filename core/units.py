@@ -408,14 +408,6 @@ def fraction_to_percent(value_fraction: float, unit: str) -> float:
         return value_fraction * 100.0
     if u == "fraction":
         return value_fraction
-def fraction_to_percent(value_fraction: float, unit: str) -> float:
-    u = unit.strip().lower()
-    if u == "%":
-        return value_fraction * 100.0
-    if u == "fraction":
-        return value_fraction
-    if u == "hp":
-        return value_fraction * 1.341022089595
     raise ValueError(f"Unsupported percent unit: {unit}")
 
 
