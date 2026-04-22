@@ -1139,7 +1139,7 @@ def render_hydraulics() -> None:
 
     base1, base2, base3, base4 = st.columns(4)
     flow_value = base1.number_input("Flow", value=100.0, key="hyd_flow")
-    flow_unit = base2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=0, key="hyd_flow_unit")
+    flow_unit = base2.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index("gpm") if "gpm" in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_flow_unit")
     density = base3.number_input("Density", value=998.0, key="hyd_density")
     density_unit = base4.selectbox("Density unit", DENSITY_UNITS, index=0, key="hyd_density_unit")
     base5, base6, base7, base8 = st.columns(4)
@@ -1197,7 +1197,7 @@ def render_hydraulics() -> None:
         c1, c2, c3, c4 = st.columns(4)
         velocity_unit = c1.selectbox("Velocity output unit", VELOCITY_UNITS, index=0, key="hyd_vel_out")
         head_unit = c2.selectbox("Head output unit", LENGTH_UNITS, index=0, key="hyd_head_out")
-        dp_unit = c3.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=0, key="hyd_dp_out")
+        dp_unit = c3.selectbox("Pressure-drop output unit", ("kPa", "psi", "bar"), index=1, key="hyd_dp_out")
         residence_unit = c4.selectbox("Residence-time output unit", TIME_UNITS, index=0, key="hyd_time_out")
         volume_unit = st.selectbox("Line-volume output unit", VOLUME_UNITS, index=0, key="hyd_vol_out")
         m1, m2, m3, m4, m5 = st.columns(5)
@@ -1215,7 +1215,7 @@ def render_hydraulics() -> None:
     with tabs[1]:
         velocity_unit = st.selectbox("Comparison velocity unit", VELOCITY_UNITS, index=0, key="hyd_cmp_vel_out")
         head_unit = st.selectbox("Comparison head unit", LENGTH_UNITS, index=0, key="hyd_cmp_head_out")
-        dp_unit = st.selectbox("Comparison ΔP unit", ("kPa", "psi", "bar"), index=0, key="hyd_cmp_dp_out")
+        dp_unit = st.selectbox("Comparison ΔP unit", ("kPa", "psi", "bar"), index=1, key="hyd_cmp_dp_out")
         residence_unit = st.selectbox("Comparison residence unit", TIME_UNITS, index=0, key="hyd_cmp_time_out")
         rows = compare_schedule_10s_sizes(
             volumetric_flow_value=flow_value,
@@ -1265,7 +1265,7 @@ def render_hydraulics() -> None:
         n5, n6, n7 = st.columns(3)
         npsh_head_unit = n5.selectbox("NPSH head unit", LENGTH_UNITS, index=0, key="hyd_npsh_head_unit")
         npsh_temp_unit = n6.selectbox("NPSH temperature unit", TEMPERATURE_UNITS, index=0, key="hyd_npsh_temp_unit")
-        npsh_dp_unit = n7.selectbox("NPSH pressure-delta unit", ("kPa", "psi", "bar"), index=0, key="hyd_npsh_dp_unit")
+        npsh_dp_unit = n7.selectbox("NPSH pressure-delta unit", ("kPa", "psi", "bar"), index=1, key="hyd_npsh_dp_unit")
         static_head_m = length_to_m(static_head_m, npsh_head_unit)
         liquid_temp_c = temperature_to_c(liquid_temp, npsh_temp_unit)
         suction_loss = st.number_input(
@@ -1755,7 +1755,7 @@ def render_hydraulics() -> None:
         seg_len_unit = sg2.selectbox("Segment length unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_len_unit")
         seg_elev_unit = sg3.selectbox("Segment elevation unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_elev_unit")
         seg_head_out_unit = sg4.selectbox("Segment head output unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_head_out")
-        seg_dp_out_unit = sg5.selectbox("Segment ΔP output unit", ("kPa", "psi", "bar"), index=0, key="hyd_seg_dp_out")
+        seg_dp_out_unit = sg5.selectbox("Segment ΔP output unit", ("kPa", "psi", "bar"), index=1, key="hyd_seg_dp_out")
         default_segments = [
             ("Suction", 2.157 * 25.4, 12.0, 0.5, 1.5),
             ("Discharge main", 2.157 * 25.4, 90.0, 0.045, 8.0),
@@ -1932,25 +1932,25 @@ def render_hydraulics() -> None:
         st.caption("Screen liquid control-valve sizing from line flow, density, and target valve pressure drop, then add cavitation/flashing checks from inlet pressure, liquid temperature, and FL.")
         c1, c2, c3 = st.columns(3)
         valve_dp = c1.number_input("Target valve ΔP", min_value=0.01, value=max(result.pressure_drop_kpa * 0.35, 20.0), key="hyd_cv_dp")
-        valve_dp_unit = c2.selectbox("Valve ΔP unit", ("kPa", "psi", "bar"), index=0, key="hyd_cv_dp_unit")
+        valve_dp_unit = c2.selectbox("Valve ΔP unit", ("kPa", "psi", "bar"), index=1, key="hyd_cv_dp_unit")
         rated_cv_enabled = c3.checkbox("Compare against rated Cv", value=True, key="hyd_cv_has_rated")
         valve_dp_kpa = valve_dp if valve_dp_unit == "kPa" else (valve_dp / 0.1450377377 if valve_dp_unit == "psi" else valve_dp * 100.0)
         c4, c5 = st.columns(2)
         rated_cv = c4.number_input("Rated Cv", min_value=0.01, value=90.0, key="hyd_cv_rated", disabled=not rated_cv_enabled)
-        other_losses_unit = c5.selectbox("Installed-loss unit", ("kPa", "psi", "bar"), index=0, key="hyd_cv_other_losses_unit")
+        other_losses_unit = c5.selectbox("Installed-loss unit", ("kPa", "psi", "bar"), index=1, key="hyd_cv_other_losses_unit")
         other_losses_value = st.number_input(f"Installed other losses excl. valve ({other_losses_unit})", min_value=0.0, value=_pressure_delta_from_kpa(max(result.pressure_drop_kpa, 0.0), other_losses_unit), key="hyd_cv_other_losses")
         other_losses_kpa = _pressure_delta_to_kpa(other_losses_value, other_losses_unit)
 
         st.markdown("**Cavitation / flashing screen**")
         q1, q2, q3, q4 = st.columns(4)
         inlet_pressure_value = q1.number_input("Valve inlet pressure", min_value=0.01, value=max(pressure_to_kpa_abs(35.0, "psig"), valve_dp_kpa + 50.0), key="hyd_cv_inlet_pressure")
-        inlet_pressure_unit = q2.selectbox("Inlet pressure unit", PRESSURE_UNITS, index=0, key="hyd_cv_inlet_pressure_unit")
+        inlet_pressure_unit = q2.selectbox("Inlet pressure unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index("psig") if "psig" in PRESSURE_UNITS else 0, key="hyd_cv_inlet_pressure_unit")
         liquid_temp_value = q3.number_input("Liquid temperature", value=80.0, key="hyd_cv_liquid_temp")
         liquid_temp_unit = q4.selectbox("Liquid temperature unit", TEMPERATURE_UNITS, index=0, key="hyd_cv_liquid_temp_unit")
         q5, q6 = st.columns(2)
         pressure_recovery_factor_fl = q5.number_input("Valve FL (pressure recovery factor)", min_value=0.10, max_value=1.00, value=0.90, step=0.01, key="hyd_cv_fl")
         q6.caption("Typical screening starting points: globe ~0.9, rotary/high-recovery trims lower. Confirm with the vendor for the actual trim.")
-        valve_pressure_out_unit = st.selectbox("Valve pressure output unit", PRESSURE_UNITS, index=0, key="hyd_cv_pressure_out_unit")
+        valve_pressure_out_unit = st.selectbox("Valve pressure output unit", PRESSURE_UNITS, index=PRESSURE_UNITS.index("psig") if "psig" in PRESSURE_UNITS else 0, key="hyd_cv_pressure_out_unit")
         liquid_temp_c = temperature_to_c(liquid_temp_value, liquid_temp_unit)
 
         valve = size_control_valve(
@@ -1994,7 +1994,7 @@ def render_hydraulics() -> None:
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         psc_col1, psc_col2 = st.columns(2)
         psc_flow_unit = psc_col1.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_psc_flow_unit")
-        psc_pressure_unit = psc_col2.selectbox("Pressure unit", ("kPa", "psi", "bar"), index=0, key="hyd_psc_pressure_unit")
+        psc_pressure_unit = psc_col2.selectbox("Pressure unit", ("kPa", "psi", "bar"), index=1, key="hyd_psc_pressure_unit")
 
         with curve_tabs[0]:
             p1, p2, p3 = st.columns(3)
