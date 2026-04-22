@@ -216,6 +216,25 @@ def _pressure_delta_from_kpa(value_kpa: float, unit: str) -> float:
     raise ValueError(f"Unsupported differential pressure unit: {unit}")
 
 
+def _pressure_delta_to_kpa(value: float, unit: str) -> float:
+    u = unit.strip().lower()
+    if u == "kpa":
+        return value
+    if u in {"psi", "psid", "psig"}:
+        return value * 6.894757293168361
+    if u in {"bar", "barg", "bara"}:
+        return value * 100.0
+    raise ValueError(f"Unsupported differential pressure unit: {unit}")
+
+
+def _head_m_to_delta_kpa(head_m: float, density_kg_m3: float) -> float:
+    return density_kg_m3 * 9.80665 * head_m / 1000.0
+
+
+def _delta_kpa_to_head_m(delta_kpa: float, density_kg_m3: float) -> float:
+    return delta_kpa * 1000.0 / max(density_kg_m3 * 9.80665, 1.0e-12)
+
+
 
 def _display_percent(value_fraction: float, unit: str) -> float:
     return value_fraction * 100.0 if unit == "%" else value_fraction
@@ -348,6 +367,7 @@ def render_quick_tools() -> None:
         viscosity_output_unit = f5.selectbox("Viscosity output unit", VISCOSITY_UNITS, index=0, key="qt_brix_visc_out")
         output_temp_unit = st.selectbox("Temperature output unit", TEMPERATURE_UNITS, index=0, key="qt_brix_temp_out")
 
+        mb_result = None
         try:
             temperature_c = temperature_to_c(temperature_value, temperature_unit)
             result = brix_reconciliation(
@@ -985,7 +1005,7 @@ def render_solution_bpe() -> None:
                 "auto": "Auto",
                 "table": "Workbook table / interpolation",
                 "high_solids": "Workbook >60 DS estimate",
-            }.get(key, key),
+            }.get(key, str(key)),
             key="bpe_method",
         )
         bpe_unit = c6.selectbox("BPE output unit", DELTA_TEMPERATURE_UNITS, index=0, key="bpe_out_unit")
@@ -1169,10 +1189,21 @@ def render_hydraulics() -> None:
         surface_pressure = n1.number_input("Tank / surface pressure", value=0.0, key="hyd_npsh_surface_pressure")
         surface_pressure_unit = n2.selectbox("Surface pressure unit", PRESSURE_UNITS, index=6, key="hyd_npsh_surface_unit")
         static_head_m = n3.number_input("Static suction head (+ flooded / - lift)", value=2.0, key="hyd_npsh_static_head")
-        liquid_temp = n4.number_input("Liquid temperature (°C)", value=35.0, key="hyd_npsh_temp")
-        suction_loss = st.number_input("Suction-line loss (head, m)", value=min(max(result.head_loss_m * 0.3, 0.1), 5.0), key="hyd_npsh_loss")
-        npsha = estimate_npsha(surface_pressure, surface_pressure_unit, static_head_m, suction_loss, liquid_temp, result.velocity_m_s, density_kg_m3)
-        st.metric("NPSHa", f"{npsha.npsha_m:,.2f} m")
+        liquid_temp = n4.number_input("Liquid temperature", value=35.0, key="hyd_npsh_temp")
+        n5, n6, n7 = st.columns(3)
+        npsh_head_unit = n5.selectbox("NPSH head unit", LENGTH_UNITS, index=0, key="hyd_npsh_head_unit")
+        npsh_temp_unit = n6.selectbox("NPSH temperature unit", TEMPERATURE_UNITS, index=0, key="hyd_npsh_temp_unit")
+        npsh_dp_unit = n7.selectbox("NPSH pressure-delta unit", ("kPa", "psi", "bar"), index=0, key="hyd_npsh_dp_unit")
+        static_head_m = length_to_m(static_head_m, npsh_head_unit)
+        liquid_temp_c = temperature_to_c(liquid_temp, npsh_temp_unit)
+        suction_loss = st.number_input(
+            f"Suction-line loss (head, {npsh_head_unit})",
+            value=m_to_length(min(max(result.head_loss_m * 0.3, 0.1), 5.0), npsh_head_unit),
+            key="hyd_npsh_loss",
+        )
+        suction_loss_m = length_to_m(suction_loss, npsh_head_unit)
+        npsha = estimate_npsha(surface_pressure, surface_pressure_unit, static_head_m, suction_loss_m, liquid_temp_c, result.velocity_m_s, density_kg_m3)
+        st.metric("NPSHa", f"{m_to_length(npsha.npsha_m, npsh_head_unit):,.2f} {npsh_head_unit}")
         _show_notes(npsha.notes)
         st.json(asdict(npsha))
 
@@ -1201,7 +1232,7 @@ def render_hydraulics() -> None:
             surface_pressure_value=surface_pressure,
             surface_pressure_unit=surface_pressure_unit,
             suction_line_loss_m=suction_loss,
-            liquid_temperature_c=liquid_temp,
+            liquid_temperature_c=liquid_temp_c,
             velocity_m_s=result.velocity_m_s,
             density_kg_m3=density_kg_m3,
             required_npshr_m=length_to_m(required_npshr_value, required_npshr_unit) if required_npshr_enabled else None,
@@ -1258,7 +1289,7 @@ def render_hydraulics() -> None:
             discharge_gauge_elevation_m=length_to_m(discharge_gauge_elevation, discharge_gauge_elevation_unit),
             pump_efficiency_fraction=field_efficiency,
             expected_system_head_m=length_to_m(expected_head_value, expected_head_unit) if compare_expected_head else None,
-            liquid_temperature_c=liquid_temp,
+            liquid_temperature_c=liquid_temp_c,
         )
         fm1, fm2, fm3, fm4 = st.columns(4)
         fm1.metric("Developed head", f"{m_to_length(field_check.developed_head_m, field_head_output_unit):,.2f} {field_head_output_unit}")
@@ -1270,10 +1301,11 @@ def render_hydraulics() -> None:
         fn2.metric("Brake power", f"{kw_to_power(field_check.brake_power_kw, power_unit):,.2f} {power_unit}" if field_check.brake_power_kw is not None else "n/a")
         fn3.metric("Brake horsepower", f"{field_check.brake_horsepower_hp:,.2f} hp" if field_check.brake_horsepower_hp is not None else "n/a")
         if field_check.head_margin_to_expected_m is not None:
+            expected_head_display_m = field_check.expected_system_head_m if field_check.expected_system_head_m is not None else 0.0
             fn4.metric(
                 "Head margin vs expected",
                 f"{m_to_length(field_check.head_margin_to_expected_m, field_head_output_unit):,.2f} {field_head_output_unit}",
-                delta=f"vs {m_to_length(field_check.expected_system_head_m, field_head_output_unit):,.2f} {field_head_output_unit}",
+                delta=f"vs {m_to_length(expected_head_display_m, field_head_output_unit):,.2f} {field_head_output_unit}",
             )
         else:
             fn4.metric("Head margin vs expected", "Not enabled")
@@ -1282,7 +1314,7 @@ def render_hydraulics() -> None:
         fv2.metric("Discharge velocity", f"{m_s_to_velocity(field_check.discharge_velocity_m_s, velocity_unit):,.2f} {velocity_unit}")
         fv3.metric("Suction pressure", f"{kpa_abs_to_pressure(field_check.suction_pressure_kpa_abs, suction_pressure_unit):,.2f} {suction_pressure_unit}")
         if field_check.suction_pressure_margin_to_vapor_kpa is not None:
-            fv4.metric("Suction margin over vapor", f"{_pressure_delta_from_kpa(field_check.suction_pressure_margin_to_vapor_kpa, 'kPa'):,.2f} kPa")
+            fv4.metric("Suction margin over vapor", f"{_pressure_delta_from_kpa(field_check.suction_pressure_margin_to_vapor_kpa, npsh_dp_unit):,.2f} {npsh_dp_unit}")
         else:
             fv4.metric("Suction margin over vapor", "Add temperature")
         _show_notes(field_check.notes)
@@ -1290,6 +1322,10 @@ def render_hydraulics() -> None:
         st.divider()
         st.subheader("Baseline comparison & curve diagnosis")
         st.caption("Compare the current measured case against a known-good baseline and, when available, check both cases against a selected pump curve at the same measured flow.")
+        baseline_flow_value = flow_value
+        baseline_flow_unit = flow_unit
+        baseline_check = None
+        baseline_curve_diag = None
         baseline_enabled = st.checkbox("Enable baseline/reference comparison", value=True, key="hyd_field_baseline_enabled")
         if baseline_enabled:
             base1, base2, base3, base4 = st.columns(4)
@@ -1327,7 +1363,7 @@ def render_hydraulics() -> None:
                 discharge_gauge_elevation_m=length_to_m(baseline_discharge_elevation, baseline_discharge_elevation_unit),
                 pump_efficiency_fraction=baseline_efficiency,
                 expected_system_head_m=length_to_m(baseline_expected_head_value, baseline_expected_head_unit) if compare_expected_head else None,
-                liquid_temperature_c=liquid_temp,
+                liquid_temperature_c=liquid_temp_c,
             )
             baseline_comparison = compare_pump_field_cases(
                 baseline_flow_m3_h=volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit),
@@ -1344,10 +1380,10 @@ def render_hydraulics() -> None:
             else:
                 bc4.metric("Brake-power change", "n/a")
             bd1, bd2, bd3, bd4 = st.columns(4)
-            bd1.metric("Suction-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_pressure_delta_kpa, 'kPa'):,.2f} kPa")
-            bd2.metric("Discharge-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.discharge_pressure_delta_kpa, 'kPa'):,.2f} kPa")
+            bd1.metric("Suction-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_pressure_delta_kpa, npsh_dp_unit):,.2f} {npsh_dp_unit}")
+            bd2.metric("Discharge-pressure change", f"{_pressure_delta_from_kpa(baseline_comparison.discharge_pressure_delta_kpa, npsh_dp_unit):,.2f} {npsh_dp_unit}")
             if baseline_comparison.suction_margin_to_vapor_delta_kpa is not None:
-                bd3.metric("Suction-margin change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_margin_to_vapor_delta_kpa, 'kPa'):,.2f} kPa")
+                bd3.metric("Suction-margin change", f"{_pressure_delta_from_kpa(baseline_comparison.suction_margin_to_vapor_delta_kpa, npsh_dp_unit):,.2f} {npsh_dp_unit}")
             else:
                 bd3.metric("Suction-margin change", "n/a")
             if baseline_comparison.expected_head_margin_delta_m is not None:
@@ -1386,13 +1422,13 @@ def render_hydraulics() -> None:
                 )
                 curve_diag_rows = [{
                     "Case": "Current",
-                    "Measured flow (m3/h)": current_curve_diag.measured_flow_m3_h,
-                    "Measured head (m)": current_curve_diag.measured_head_m,
-                    "Curve head at same flow (m)": current_curve_diag.curve_head_m,
-                    "Head delta vs curve (m)": current_curve_diag.head_delta_m,
+                    f"Measured flow ({flow_unit})": m3_h_to_volumetric_flow(current_curve_diag.measured_flow_m3_h, flow_unit),
+                    f"Measured head ({field_head_output_unit})": m_to_length(current_curve_diag.measured_head_m, field_head_output_unit),
+                    f"Curve head at same flow ({field_head_output_unit})": m_to_length(current_curve_diag.curve_head_m, field_head_output_unit) if current_curve_diag.curve_head_m is not None else None,
+                    f"Head delta vs curve ({field_head_output_unit})": m_to_length(current_curve_diag.head_delta_m, field_head_output_unit) if current_curve_diag.head_delta_m is not None else None,
                     "Status": current_curve_diag.status,
                 }]
-                if baseline_enabled:
+                if baseline_enabled and baseline_check is not None:
                     baseline_curve_diag = compare_measured_point_to_curve(
                         curve_diag,
                         measured_flow_m3_h=volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit),
@@ -1400,46 +1436,46 @@ def render_hydraulics() -> None:
                     )
                     curve_diag_rows.append({
                         "Case": "Baseline",
-                        "Measured flow (m3/h)": baseline_curve_diag.measured_flow_m3_h,
-                        "Measured head (m)": baseline_curve_diag.measured_head_m,
-                        "Curve head at same flow (m)": baseline_curve_diag.curve_head_m,
-                        "Head delta vs curve (m)": baseline_curve_diag.head_delta_m,
+                        f"Measured flow ({flow_unit})": m3_h_to_volumetric_flow(baseline_curve_diag.measured_flow_m3_h, flow_unit),
+                        f"Measured head ({field_head_output_unit})": m_to_length(baseline_curve_diag.measured_head_m, field_head_output_unit),
+                        f"Curve head at same flow ({field_head_output_unit})": m_to_length(baseline_curve_diag.curve_head_m, field_head_output_unit) if baseline_curve_diag.curve_head_m is not None else None,
+                        f"Head delta vs curve ({field_head_output_unit})": m_to_length(baseline_curve_diag.head_delta_m, field_head_output_unit) if baseline_curve_diag.head_delta_m is not None else None,
                         "Status": baseline_curve_diag.status,
                     })
                 st.dataframe(pd.DataFrame(curve_diag_rows), use_container_width=True)
                 curve_fig = go.Figure()
                 curve_fig.add_trace(go.Scatter(
-                    x=[point.flow_m3_h for point in curve_diag.points],
-                    y=[point.head_m for point in curve_diag.points],
+                    x=[m3_h_to_volumetric_flow(point.flow_m3_h, flow_unit) for point in curve_diag.points],
+                    y=[m_to_length(point.head_m, field_head_output_unit) for point in curve_diag.points],
                     mode="lines+markers",
                     name=curve_diag.name,
                 ))
                 curve_fig.add_trace(go.Scatter(
-                    x=[current_curve_diag.measured_flow_m3_h],
-                    y=[current_curve_diag.measured_head_m],
+                    x=[m3_h_to_volumetric_flow(current_curve_diag.measured_flow_m3_h, flow_unit)],
+                    y=[m_to_length(current_curve_diag.measured_head_m, field_head_output_unit)],
                     mode="markers",
                     marker=dict(size=12),
                     name="Current measured case",
                 ))
-                if baseline_enabled:
+                if baseline_enabled and baseline_curve_diag is not None:
                     curve_fig.add_trace(go.Scatter(
-                        x=[baseline_curve_diag.measured_flow_m3_h],
-                        y=[baseline_curve_diag.measured_head_m],
+                        x=[m3_h_to_volumetric_flow(baseline_curve_diag.measured_flow_m3_h, flow_unit)],
+                        y=[m_to_length(baseline_curve_diag.measured_head_m, field_head_output_unit)],
                         mode="markers",
                         marker=dict(size=12, symbol="diamond"),
                         name="Baseline measured case",
                     ))
-                curve_fig.update_layout(title="Measured cases vs selected pump curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+                curve_fig.update_layout(title="Measured cases vs selected pump curve", xaxis_title=f"Flow ({flow_unit})", yaxis_title=f"Head ({field_head_output_unit})")
                 st.plotly_chart(curve_fig, use_container_width=True)
                 _show_notes(current_curve_diag.notes)
-                if baseline_enabled:
+                if baseline_enabled and baseline_curve_diag is not None:
                     _show_notes([f"Baseline: {note}" for note in baseline_curve_diag.notes])
                 with st.expander("Current field-check JSON"):
                     st.json(asdict(field_check))
                 with st.expander("Curve diagnosis JSON"):
                     st.json({
                         "current": asdict(current_curve_diag),
-                        "baseline": asdict(baseline_curve_diag) if baseline_enabled else None,
+                        "baseline": asdict(baseline_curve_diag) if baseline_enabled and baseline_curve_diag is not None else None,
                     })
         else:
             with st.expander("Current field-check JSON"):
@@ -1506,8 +1542,8 @@ def render_hydraulics() -> None:
                 )
 
                 bp1, bp2, bp3, bp4 = st.columns(4)
-                bp1.metric("Estimated BEP flow", f"{bep_result.bep_flow_m3_h:,.1f} m3/h", help=f"~{bep_est.flow_fraction_of_max:.0%} of curve range")
-                bp2.metric("Estimated BEP head", f"{bep_result.bep_head_m:,.1f} m")
+                bp1.metric("Estimated BEP flow", f"{m3_h_to_volumetric_flow(bep_result.bep_flow_m3_h, flow_unit):,.1f} {flow_unit}", help=f"~{bep_est.flow_fraction_of_max:.0%} of curve range")
+                bp2.metric("Estimated BEP head", f"{m_to_length(bep_result.bep_head_m, field_head_output_unit):,.1f} {field_head_output_unit}")
                 bp3.metric(
                     "BEP proximity status",
                     _title_case_status(bep_result.proximity_status),
@@ -1523,32 +1559,32 @@ def render_hydraulics() -> None:
 
                 b_fig = go.Figure()
                 b_fig.add_trace(go.Scatter(
-                    x=[pt.flow_m3_h for pt in bep_curve_used.points],
-                    y=[pt.head_m for pt in bep_curve_used.points],
+                    x=[m3_h_to_volumetric_flow(pt.flow_m3_h, flow_unit) for pt in bep_curve_used.points],
+                    y=[m_to_length(pt.head_m, field_head_output_unit) for pt in bep_curve_used.points],
                     mode="lines+markers",
                     name=bep_curve_used.name,
                     line=dict(dash="solid"),
                 ))
                 # Mark BEP point
                 b_fig.add_trace(go.Scatter(
-                    x=[bep_result.bep_flow_m3_h],
-                    y=[bep_result.bep_head_m],
+                    x=[m3_h_to_volumetric_flow(bep_result.bep_flow_m3_h, flow_unit)],
+                    y=[m_to_length(bep_result.bep_head_m, field_head_output_unit)],
                     mode="markers",
                     marker=dict(size=14, symbol="star", color="green"),
-                    name=f"Estimated BEP ({bep_result.bep_flow_m3_h:.1f} m3/h, {bep_result.bep_head_m:.1f} m)",
+                    name=f"Estimated BEP ({m3_h_to_volumetric_flow(bep_result.bep_flow_m3_h, flow_unit):.1f} {flow_unit}, {m_to_length(bep_result.bep_head_m, field_head_output_unit):.1f} {field_head_output_unit})",
                 ))
                 # Mark measured current point
                 b_fig.add_trace(go.Scatter(
-                    x=[cur_flow_m3_h],
-                    y=[cur_head_m],
+                    x=[m3_h_to_volumetric_flow(cur_flow_m3_h, flow_unit)],
+                    y=[m_to_length(cur_head_m, field_head_output_unit)],
                     mode="markers",
                     marker=dict(size=12, symbol="circle", color="red"),
-                    name=f"Current measured ({cur_flow_m3_h:.1f} m3/h, {cur_head_m:.1f} m)",
+                    name=f"Current measured ({m3_h_to_volumetric_flow(cur_flow_m3_h, flow_unit):.1f} {flow_unit}, {m_to_length(cur_head_m, field_head_output_unit):.1f} {field_head_output_unit})",
                 ))
                 # Mark preferred zone band
                 flow_range = bep_curve_used.points[-1].flow_m3_h - bep_curve_used.points[0].flow_m3_h
-                lo_f = bep_curve_used.points[0].flow_m3_h + pref_zone_lo * flow_range
-                hi_f = bep_curve_used.points[0].flow_m3_h + pref_zone_hi * flow_range
+                lo_f = m3_h_to_volumetric_flow(bep_curve_used.points[0].flow_m3_h + pref_zone_lo * flow_range, flow_unit)
+                hi_f = m3_h_to_volumetric_flow(bep_curve_used.points[0].flow_m3_h + pref_zone_hi * flow_range, flow_unit)
                 b_fig.add_vrect(
                     x0=lo_f, x1=hi_f,
                     fillcolor="green", opacity=0.08,
@@ -1557,19 +1593,19 @@ def render_hydraulics() -> None:
                     annotation_position="top",
                 )
                 # Mark baseline if available
-                if baseline_enabled and "baseline_curve_diag" in dir() and baseline_curve_diag is not None:
+                if baseline_enabled and baseline_curve_diag is not None and baseline_check is not None:
                     bl_flow = volumetric_flow_to_m3_h(baseline_flow_value, baseline_flow_unit)
                     b_fig.add_trace(go.Scatter(
-                        x=[bl_flow],
-                        y=[baseline_check.developed_head_m],
+                        x=[m3_h_to_volumetric_flow(bl_flow, flow_unit)],
+                        y=[m_to_length(baseline_check.developed_head_m, field_head_output_unit)],
                         mode="markers",
                         marker=dict(size=12, symbol="diamond", color="blue"),
-                        name=f"Baseline ({bl_flow:.1f} m3/h, {baseline_check.developed_head_m:.1f} m)",
+                        name=f"Baseline ({m3_h_to_volumetric_flow(bl_flow, flow_unit):.1f} {flow_unit}, {m_to_length(baseline_check.developed_head_m, field_head_output_unit):.1f} {field_head_output_unit})",
                     ))
                 b_fig.update_layout(
                     title=f"BEP proximity on {bep_curve_used.name}",
-                    xaxis_title="Flow (m3/h)",
-                    yaxis_title="Head (m)",
+                    xaxis_title=f"Flow ({flow_unit})",
+                    yaxis_title=f"Head ({field_head_output_unit})",
                 )
                 st.plotly_chart(b_fig, use_container_width=True)
                 _show_notes(bep_result.notes)
@@ -1591,9 +1627,9 @@ def render_hydraulics() -> None:
                 key="hyd_instr_exp_flow_unit",
             )
             ib_head_expected_value = ib3.number_input(
-                "Expected/reference head (m)",
+                f"Expected/reference head ({field_head_output_unit})",
                 min_value=0.0,
-                value=field_check.developed_head_m,
+                value=m_to_length(field_check.developed_head_m, field_head_output_unit),
                 key="hyd_instr_exp_head",
             )
             ib_gauge_accuracy = ib4.selectbox(
@@ -1608,7 +1644,7 @@ def render_hydraulics() -> None:
                 measured_flow_m3_h=volumetric_flow_to_m3_h(flow_value, flow_unit),
                 measured_head_m=field_check.developed_head_m,
                 expected_flow_m3_h=volumetric_flow_to_m3_h(ib_flow_expected_value, ib_flow_expected_unit),
-                expected_head_m=ib_head_expected_value,
+                expected_head_m=length_to_m(ib_head_expected_value, field_head_output_unit),
                 flow_gauge_accuracy_pct=gauge_acc_num,
                 pressure_gauge_accuracy_pct=gauge_acc_num,
             )
@@ -1616,12 +1652,12 @@ def render_hydraulics() -> None:
             bias1, bias2, bias3, bias4 = st.columns(4)
             bias1.metric(
                 "Flow discrepancy",
-                f"{ib_bias.flow_discrepancy_m3_h:+.2f} m3/h",
+                f"{m3_h_to_volumetric_flow(ib_bias.flow_discrepancy_m3_h, flow_unit):+.2f} {flow_unit}",
                 delta=f"{ib_bias.flow_bias_pct:.1f}% of reading",
             )
             bias2.metric(
                 "Head discrepancy",
-                f"{ib_bias.head_discrepancy_m:+.2f} m",
+                f"{m_to_length(ib_bias.head_discrepancy_m, field_head_output_unit):+.2f} {field_head_output_unit}",
                 delta=f"{ib_bias.head_bias_pct:.1f}% of reading",
             )
             bias3.metric(
@@ -1642,6 +1678,12 @@ def render_hydraulics() -> None:
 
     with tabs[3]:
         st.caption("Enter up to three sequential piping sections to estimate total system TDH and pressure drop.")
+        sg1, sg2, sg3, sg4, sg5 = st.columns(5)
+        seg_id_unit = sg1.selectbox("Segment ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index("mm") if "mm" in LENGTH_UNITS else 0, key="hyd_seg_id_unit")
+        seg_len_unit = sg2.selectbox("Segment length unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_len_unit")
+        seg_elev_unit = sg3.selectbox("Segment elevation unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_elev_unit")
+        seg_head_out_unit = sg4.selectbox("Segment head output unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_seg_head_out")
+        seg_dp_out_unit = sg5.selectbox("Segment ΔP output unit", ("kPa", "psi", "bar"), index=0, key="hyd_seg_dp_out")
         default_segments = [
             ("Suction", 2.157 * 25.4, 12.0, 0.5, 1.5),
             ("Discharge main", 2.157 * 25.4, 90.0, 0.045, 8.0),
@@ -1652,18 +1694,22 @@ def render_hydraulics() -> None:
             st.markdown(f"Section {idx}: {name}")
             s1, s2, s3, s4, s5 = st.columns(5)
             seg_name = s1.text_input("Name", value=name, key=f"seg_name_{idx}")
-            seg_id = s2.number_input("ID (mm)", value=default_id_mm, key=f"seg_id_{idx}")
-            seg_len = s3.number_input("Length (m)", value=default_len, key=f"seg_len_{idx}")
-            seg_elev = s4.number_input("Elevation change (m)", value=0.0 if idx != 3 else 8.0, key=f"seg_elev_{idx}")
+            seg_id = s2.number_input(f"ID ({seg_id_unit})", value=m_to_length(default_id_mm / 1000.0, seg_id_unit), key=f"seg_id_{idx}")
+            seg_len = s3.number_input(f"Length ({seg_len_unit})", value=m_to_length(default_len, seg_len_unit), key=f"seg_len_{idx}")
+            seg_elev = s4.number_input(f"Elevation change ({seg_elev_unit})", value=m_to_length(0.0 if idx != 3 else 8.0, seg_elev_unit), key=f"seg_elev_{idx}")
             seg_k = s5.number_input("Total K", value=default_k, key=f"seg_k_{idx}")
-            segments.append(PipeSegment(seg_name, seg_id, seg_len, default_rough, seg_elev, seg_k))
+            segments.append(PipeSegment(seg_name, length_to_m(seg_id, seg_id_unit) * 1000.0, length_to_m(seg_len, seg_len_unit), default_rough, length_to_m(seg_elev, seg_elev_unit), seg_k))
         seg_result = calculate_segmented_system(volumetric_flow_to_m3_h(flow_value, flow_unit), density_kg_m3, viscosity_cp, segments)
-        st.metric("Segmented system TDH", f"{seg_result.total_dynamic_head_m:,.2f} m")
-        st.metric("Segmented system ΔP", f"{seg_result.total_pressure_drop_kpa:,.2f} kPa")
+        st.metric("Segmented system TDH", f"{m_to_length(seg_result.total_dynamic_head_m, seg_head_out_unit):,.2f} {seg_head_out_unit}")
+        st.metric("Segmented system ΔP", f"{_pressure_delta_from_kpa(seg_result.total_pressure_drop_kpa, seg_dp_out_unit):,.2f} {seg_dp_out_unit}")
         st.dataframe(pd.DataFrame([asdict(segment) for segment in seg_result.segments]), use_container_width=True)
         _show_notes(seg_result.notes)
     with tabs[4]:
         st.caption("Check whether a parallel network will naturally self-balance or whether the entered split requires throttling/orifice loss to hold the intended branch flows.")
+        pb1, pb2, pb3 = st.columns(3)
+        parallel_id_unit = pb1.selectbox("Branch ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index("mm") if "mm" in LENGTH_UNITS else 0, key="hyd_parallel_id_unit")
+        parallel_len_unit = pb2.selectbox("Branch length unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_parallel_len_unit")
+        parallel_elev_unit = pb3.selectbox("Branch elevation unit", LENGTH_UNITS, index=LENGTH_UNITS.index("m") if "m" in LENGTH_UNITS else 0, key="hyd_parallel_elev_unit")
         branch_mode = st.radio(
             "Parallel branch mode",
             ("entered_split", "self_balancing"),
@@ -1682,9 +1728,9 @@ def render_hydraulics() -> None:
             st.markdown(f"Parallel branch {idx}")
             b1, b2, b3, b4, b5, b6 = st.columns(6)
             branch_name = b1.text_input("Name", value=name, key=f"hyd_branch_name_{idx}")
-            branch_id = b2.number_input("ID (mm)", value=id_mm, key=f"hyd_branch_id_{idx}")
-            branch_len = b3.number_input("Length (m)", value=length_m, key=f"hyd_branch_len_{idx}")
-            branch_elev = b4.number_input("Elevation change (m)", value=elev_m, key=f"hyd_branch_elev_{idx}")
+            branch_id = b2.number_input(f"ID ({parallel_id_unit})", value=m_to_length(id_mm / 1000.0, parallel_id_unit), key=f"hyd_branch_id_{idx}")
+            branch_len = b3.number_input(f"Length ({parallel_len_unit})", value=m_to_length(length_m, parallel_len_unit), key=f"hyd_branch_len_{idx}")
+            branch_elev = b4.number_input(f"Elevation change ({parallel_elev_unit})", value=m_to_length(elev_m, parallel_elev_unit), key=f"hyd_branch_elev_{idx}")
             branch_k = b5.number_input("Total K", value=k_total, key=f"hyd_branch_k_{idx}")
             branch_split = b6.number_input(
                 "Flow split fraction",
@@ -1693,7 +1739,7 @@ def render_hydraulics() -> None:
                 key=f"hyd_branch_split_{idx}",
                 disabled=branch_mode == "self_balancing",
             )
-            branches.append(PipeSegment(branch_name, branch_id, branch_len, roughness_mm, branch_elev, branch_k))
+            branches.append(PipeSegment(branch_name, length_to_m(branch_id, parallel_id_unit) * 1000.0, length_to_m(branch_len, parallel_len_unit), roughness_mm, length_to_m(branch_elev, parallel_elev_unit), branch_k))
             fractions.append(branch_split)
         total_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         branch_result = analyze_parallel_branches(
@@ -1704,9 +1750,9 @@ def render_hydraulics() -> None:
             branch_split_fractions=fractions,
             mode=branch_mode,
         )
-        st.metric("Branch head spread", f"{branch_result.head_spread_m:,.4f} m")
+        st.metric("Branch head spread", f"{m_to_length(branch_result.head_spread_m, head_unit):,.4f} {head_unit}")
         if branch_result.common_branch_head_m is not None:
-            st.metric("Common balanced head", f"{branch_result.common_branch_head_m:,.3f} m")
+            st.metric("Common balanced head", f"{m_to_length(branch_result.common_branch_head_m, head_unit):,.3f} {head_unit}")
         branch_df = pd.DataFrame([
             {
                 "Branch": branch.name,
@@ -1793,8 +1839,10 @@ def render_hydraulics() -> None:
         vessel_diameter = v3.number_input("Vessel diameter", min_value=0.1, value=2.5, key="hyd_vessel_diameter")
         vessel_diameter_unit = v4.selectbox("Diameter unit", LENGTH_UNITS, index=0, key="hyd_vessel_diameter_unit")
         level_fraction = v5.number_input("Liquid level fraction", min_value=0.0, value=0.65, key="hyd_vessel_level_fraction")
-        head_unit = st.selectbox("Vessel head output unit", LENGTH_UNITS, index=0, key="hyd_vessel_head_out")
-        volume_unit = st.selectbox("Vessel volume output unit", VOLUME_UNITS, index=0, key="hyd_vessel_vol_out")
+        vh1, vh2, vh3 = st.columns(3)
+        head_unit = vh1.selectbox("Vessel head output unit", LENGTH_UNITS, index=0, key="hyd_vessel_head_out")
+        volume_unit = vh2.selectbox("Vessel volume output unit", VOLUME_UNITS, index=0, key="hyd_vessel_vol_out")
+        vessel_pressure_out_unit = vh3.selectbox("Vessel pressure output unit", PRESSURE_UNITS, index=6, key="hyd_vessel_pressure_out")
         vessel = calculate_vessel_static_head(
             liquid_height_m=length_to_m(vessel_height, vessel_height_unit),
             vessel_diameter_m=length_to_m(vessel_diameter, vessel_diameter_unit),
@@ -1803,7 +1851,7 @@ def render_hydraulics() -> None:
         )
         m1, m2, m3 = st.columns(3)
         m1.metric("Static head", f"{m_to_length(vessel.static_head_m, head_unit):,.2f} {head_unit}")
-        m2.metric("Bottom pressure", f"{vessel.bottom_pressure_kpa_g:,.2f} kPag")
+        m2.metric("Bottom pressure", f"{kpa_abs_to_pressure(vessel.bottom_pressure_kpa_g + 101.325, vessel_pressure_out_unit):,.2f} {vessel_pressure_out_unit}")
         m3.metric("Liquid volume", f"{m3_to_volume(vessel.volume_m3, volume_unit):,.2f} {volume_unit}")
         _show_notes(vessel.notes)
         st.json(asdict(vessel))
@@ -1817,7 +1865,9 @@ def render_hydraulics() -> None:
         valve_dp_kpa = valve_dp if valve_dp_unit == "kPa" else (valve_dp / 0.1450377377 if valve_dp_unit == "psi" else valve_dp * 100.0)
         c4, c5 = st.columns(2)
         rated_cv = c4.number_input("Rated Cv", min_value=0.01, value=90.0, key="hyd_cv_rated", disabled=not rated_cv_enabled)
-        other_losses_kpa = c5.number_input("Installed other losses excl. valve (kPa)", min_value=0.0, value=max(result.pressure_drop_kpa, 0.0), key="hyd_cv_other_losses")
+        other_losses_unit = c5.selectbox("Installed-loss unit", ("kPa", "psi", "bar"), index=0, key="hyd_cv_other_losses_unit")
+        other_losses_value = st.number_input(f"Installed other losses excl. valve ({other_losses_unit})", min_value=0.0, value=_pressure_delta_from_kpa(max(result.pressure_drop_kpa, 0.0), other_losses_unit), key="hyd_cv_other_losses")
+        other_losses_kpa = _pressure_delta_to_kpa(other_losses_value, other_losses_unit)
 
         st.markdown("**Cavitation / flashing screen**")
         q1, q2, q3, q4 = st.columns(4)
@@ -1828,6 +1878,7 @@ def render_hydraulics() -> None:
         q5, q6 = st.columns(2)
         pressure_recovery_factor_fl = q5.number_input("Valve FL (pressure recovery factor)", min_value=0.10, max_value=1.00, value=0.90, step=0.01, key="hyd_cv_fl")
         q6.caption("Typical screening starting points: globe ~0.9, rotary/high-recovery trims lower. Confirm with the vendor for the actual trim.")
+        valve_pressure_out_unit = st.selectbox("Valve pressure output unit", PRESSURE_UNITS, index=0, key="hyd_cv_pressure_out_unit")
         liquid_temp_c = temperature_to_c(liquid_temp_value, liquid_temp_unit)
 
         valve = size_control_valve(
@@ -1847,21 +1898,21 @@ def render_hydraulics() -> None:
         m3.metric("Specific gravity", f"{valve.specific_gravity:,.3f}")
         authority_display = f"{valve.valve_authority:,.2f}" if valve.valve_authority is not None else "n/a"
         m4.metric("Valve authority", authority_display)
-        if rated_cv_enabled and valve.opening_fraction_linear is not None and valve.opening_fraction_equal_percentage is not None:
+        if rated_cv_enabled and valve.rated_cv is not None and valve.rated_cv > 0 and valve.opening_fraction_linear is not None and valve.opening_fraction_equal_percentage is not None:
             o1, o2, o3 = st.columns(3)
             o1.metric("Rated Cv loading", f"{valve.required_cv / valve.rated_cv * 100.0:,.1f}%")
             o2.metric("Linear trim opening", f"{valve.opening_fraction_linear * 100.0:,.1f}%")
             o3.metric("Equal-% opening", f"{valve.opening_fraction_equal_percentage * 100.0:,.1f}%")
 
         cstat1, cstat2, cstat3, cstat4 = st.columns(4)
-        cstat1.metric("Outlet pressure", f"{kpa_abs_to_pressure(valve.outlet_pressure_kpa_abs, inlet_pressure_unit):,.2f} {inlet_pressure_unit}" if valve.outlet_pressure_kpa_abs is not None else "n/a")
-        cstat2.metric("Vapor pressure", f"{kpa_abs_to_pressure(valve.vapor_pressure_kpa_abs, 'kPa'):,.2f} kPa" if valve.vapor_pressure_kpa_abs is not None else "n/a")
+        cstat1.metric("Outlet pressure", f"{kpa_abs_to_pressure(valve.outlet_pressure_kpa_abs, valve_pressure_out_unit):,.2f} {valve_pressure_out_unit}" if valve.outlet_pressure_kpa_abs is not None else "n/a")
+        cstat2.metric("Vapor pressure", f"{kpa_abs_to_pressure(valve.vapor_pressure_kpa_abs, valve_pressure_out_unit):,.2f} {valve_pressure_out_unit}" if valve.vapor_pressure_kpa_abs is not None else "n/a")
         cstat3.metric("Cavitation index σ", f"{valve.cavitation_index_sigma:,.2f}" if valve.cavitation_index_sigma is not None else "n/a")
         cstat4.metric("Status", (valve.cavitation_status or "n/a").replace("_", " ").title())
         if valve.liquid_critical_pressure_drop_kpa is not None:
             d1, d2 = st.columns(2)
             d1.metric("FL-based critical ΔP", f"{_pressure_delta_from_kpa(valve.liquid_critical_pressure_drop_kpa, valve_dp_unit):,.2f} {valve_dp_unit}")
-            d2.metric("Predicted vena-contracta pressure", f"{valve.predicted_vena_contracta_pressure_kpa_abs:,.2f} kPa abs" if valve.predicted_vena_contracta_pressure_kpa_abs is not None else "n/a")
+            d2.metric("Predicted vena-contracta pressure", f"{kpa_abs_to_pressure(valve.predicted_vena_contracta_pressure_kpa_abs, valve_pressure_out_unit):,.2f} {valve_pressure_out_unit}" if valve.predicted_vena_contracta_pressure_kpa_abs is not None else "n/a")
         _show_notes(valve.notes)
         st.json(asdict(valve))
 
@@ -1871,44 +1922,44 @@ def render_hydraulics() -> None:
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         psc_col1, psc_col2 = st.columns(2)
         psc_flow_unit = psc_col1.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_psc_flow_unit")
-        psc_head_unit = psc_col2.selectbox("Head unit", LENGTH_UNITS, index=0, key="hyd_psc_head_unit")
+        psc_pressure_unit = psc_col2.selectbox("Pressure unit", ("kPa", "psi", "bar"), index=0, key="hyd_psc_pressure_unit")
 
         with curve_tabs[0]:
             p1, p2, p3 = st.columns(3)
-            _default_shutoff = m_to_length(max(result.total_dynamic_head_m * 1.6, 20.0), psc_head_unit)
+            _default_shutoff = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.6, 20.0), density_kg_m3), psc_pressure_unit)
             _default_max_flow = m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.5, 10.0), psc_flow_unit)
-            _default_head_at_max = m_to_length(max(result.total_dynamic_head_m * 0.5, 1.0), psc_head_unit)
-            _default_static_head = m_to_length(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_head_unit)
-            shutoff_head = p1.number_input(f"Pump shutoff head ({psc_head_unit})", min_value=0.0, value=_default_shutoff, key="hyd_curve_shutoff")
+            _default_head_at_max = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.5, 1.0), density_kg_m3), psc_pressure_unit)
+            _default_static_head = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), density_kg_m3), psc_pressure_unit)
+            shutoff_head = p1.number_input(f"Pump shutoff pressure rise ({psc_pressure_unit})", min_value=0.0, value=_default_shutoff, key="hyd_curve_shutoff")
             max_flow_curve = p2.number_input(f"Pump max flow ({psc_flow_unit})", min_value=0.0, value=_default_max_flow, key="hyd_curve_max_flow")
-            head_at_max_flow = p3.number_input(f"Pump head at max flow ({psc_head_unit})", min_value=0.0, value=_default_head_at_max, key="hyd_curve_head_at_max")
-            static_curve_head = st.number_input(f"System static head ({psc_head_unit})", value=_default_static_head, key="hyd_curve_static_head")
-            shutoff_head_m = length_to_m(shutoff_head, psc_head_unit)
+            head_at_max_flow = p3.number_input(f"Pump pressure at max flow ({psc_pressure_unit})", min_value=0.0, value=_default_head_at_max, key="hyd_curve_head_at_max")
+            static_curve_head = st.number_input(f"System static pressure rise ({psc_pressure_unit})", value=_default_static_head, key="hyd_curve_static_head")
+            shutoff_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(shutoff_head, psc_pressure_unit), density_kg_m3)
             max_flow_curve_m3_h = volumetric_flow_to_m3_h(max_flow_curve, psc_flow_unit)
-            head_at_max_flow_m = length_to_m(head_at_max_flow, psc_head_unit)
-            static_curve_head_m = length_to_m(static_curve_head, psc_head_unit)
+            head_at_max_flow_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(head_at_max_flow, psc_pressure_unit), density_kg_m3)
+            static_curve_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(static_curve_head, psc_pressure_unit), density_kg_m3)
             k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
             curve_points = build_system_curve(static_curve_head_m, k_factor, max_flow_curve_m3_h)
             intersection = find_pump_system_intersection(shutoff_head_m, head_at_max_flow_m, max_flow_curve_m3_h, static_curve_head_m, k_factor)
             xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in curve_points]
-            system_heads = [m_to_length(point.total_dynamic_head_m, psc_head_unit) for point in curve_points]
-            pump_heads = [m_to_length(shutoff_head_m + (head_at_max_flow_m - shutoff_head_m) * (point.flow_m3_h / max(max_flow_curve_m3_h, 1e-9)), psc_head_unit) for point in curve_points]
+            system_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.total_dynamic_head_m, density_kg_m3), psc_pressure_unit) for point in curve_points]
+            pump_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(shutoff_head_m + (head_at_max_flow_m - shutoff_head_m) * (point.flow_m3_h / max(max_flow_curve_m3_h, 1e-9)), density_kg_m3), psc_pressure_unit) for point in curve_points]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
             fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
             if intersection is not None:
-                fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit)], y=[m_to_length(intersection.total_dynamic_head_m, psc_head_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit)], y=[_pressure_delta_from_kpa(_head_m_to_delta_kpa(intersection.total_dynamic_head_m, density_kg_m3), psc_pressure_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                 m1, m2 = st.columns(2)
                 m1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
-                m2.metric("Estimated operating head", f"{m_to_length(intersection.total_dynamic_head_m, psc_head_unit):,.2f} {psc_head_unit}")
-            fig.update_layout(title="Pump vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Head ({psc_head_unit})")
+                m2.metric("Estimated operating pressure", f"{_pressure_delta_from_kpa(_head_m_to_delta_kpa(intersection.total_dynamic_head_m, density_kg_m3), psc_pressure_unit):,.2f} {psc_pressure_unit}")
+            fig.update_layout(title="Pump vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Pressure ({psc_pressure_unit})")
             st.plotly_chart(fig, use_container_width=True)
 
         with curve_tabs[1]:
             st.caption("Use a built-in pump curve or upload vendor flow-head points from CSV/Excel, then compare that curve against the estimated system curve.")
-            _adv_default_static = m_to_length(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_head_unit)
-            static_curve_head = st.number_input(f"System static head ({psc_head_unit})", value=_adv_default_static, key="hyd_curve_static_head_adv")
-            static_curve_head_m = length_to_m(static_curve_head, psc_head_unit)
+            _adv_default_static = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), density_kg_m3), psc_pressure_unit)
+            static_curve_head = st.number_input(f"System static pressure rise ({psc_pressure_unit})", value=_adv_default_static, key="hyd_curve_static_head_adv")
+            static_curve_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(static_curve_head, psc_pressure_unit), density_kg_m3)
             k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
             curve_source = st.radio("Pump curve source", ["Built-in library", "Upload CSV/Excel", "Manual table"], horizontal=True, key="hyd_curve_source")
 
@@ -1935,23 +1986,30 @@ def render_hydraulics() -> None:
                         st.dataframe(uploaded_df.head(15), use_container_width=True)
                         columns = list(uploaded_df.columns)
                         flow_col = st.selectbox("Flow column", columns, index=0, key="hyd_curve_upload_flow_col")
-                        head_col = st.selectbox("Head column", columns, index=1 if len(columns) > 1 else 0, key="hyd_curve_upload_head_col")
+                        head_col = st.selectbox("Pressure column", columns, index=1 if len(columns) > 1 else 0, key="hyd_curve_upload_head_col")
                         curve_name = st.text_input("Curve name", value=Path(uploaded_curve.name).stem, key="hyd_curve_upload_name")
                         curve_family = st.text_input("Curve family / pump tag", value="Uploaded vendor curve", key="hyd_curve_upload_family")
-                        selected_curve = build_pump_curve_from_xy_rows(curve_name, uploaded_df.to_dict(orient="records"), flow_col, head_col, family=curve_family)
+                        uploaded_rows_si = [
+                            {
+                                "flow_m3_h": volumetric_flow_to_m3_h(row.get(flow_col) or 0.0, psc_flow_unit),
+                                "head_m": _delta_kpa_to_head_m(_pressure_delta_to_kpa(row.get(head_col) or 0.0, psc_pressure_unit), density_kg_m3),
+                            }
+                            for row in uploaded_df.to_dict(orient="records")
+                        ]
+                        selected_curve = build_pump_curve_from_xy_rows(curve_name, uploaded_rows_si, "flow_m3_h", "head_m", family=curve_family)
             else:
                 _mc_flow_col = f"flow ({psc_flow_unit})"
-                _mc_head_col = f"head ({psc_head_unit})"
+                _mc_head_col = f"pressure ({psc_pressure_unit})"
                 manual_curve = pd.DataFrame([
-                    {_mc_flow_col: m3_h_to_volumetric_flow(0.0, psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 1.7, 25.0), psc_head_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 0.5, 10.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 1.2, 15.0), psc_head_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h, 20.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 0.95, 8.0), psc_head_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.35, 30.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 0.65, 3.0), psc_head_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(0.0, psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.7, 25.0), density_kg_m3), psc_pressure_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 0.5, 10.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.2, 15.0), density_kg_m3), psc_pressure_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h, 20.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.95, 8.0), density_kg_m3), psc_pressure_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.35, 30.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.65, 3.0), density_kg_m3), psc_pressure_unit)},
                 ])
                 edited_curve = st.data_editor(manual_curve, num_rows="dynamic", use_container_width=True, key="hyd_curve_manual_editor")
                 curve_name = st.text_input("Curve name", value="Manual pump curve", key="hyd_curve_manual_name")
                 curve_family = st.text_input("Curve family / pump tag", value="Manual entry", key="hyd_curve_manual_family")
-                _mc_si_rows = [{"flow_m3_h": volumetric_flow_to_m3_h(row.get(_mc_flow_col) or 0.0, psc_flow_unit), "head_m": length_to_m(row.get(_mc_head_col) or 0.0, psc_head_unit)} for row in edited_curve.to_dict(orient="records")]
+                _mc_si_rows = [{"flow_m3_h": volumetric_flow_to_m3_h(row.get(_mc_flow_col) or 0.0, psc_flow_unit), "head_m": _delta_kpa_to_head_m(_pressure_delta_to_kpa(row.get(_mc_head_col) or 0.0, psc_pressure_unit), density_kg_m3)} for row in edited_curve.to_dict(orient="records")]
                 selected_curve = build_pump_curve_from_xy_rows(curve_name, _mc_si_rows, "flow_m3_h", "head_m", family=curve_family)
 
             if selected_curve is not None:
@@ -1959,26 +2017,26 @@ def render_hydraulics() -> None:
                 system_curve_points = build_system_curve(static_curve_head_m, k_factor, max_curve_flow)
                 library_intersection = find_curve_system_intersection(selected_curve, static_curve_head_m, k_factor)
                 curve_df = pd.DataFrame([
-                    {f"Flow ({psc_flow_unit})": m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit), f"Pump head ({psc_head_unit})": m_to_length(point.head_m, psc_head_unit)}
+                    {f"Flow ({psc_flow_unit})": m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit), f"Pump pressure ({psc_pressure_unit})": _pressure_delta_from_kpa(_head_m_to_delta_kpa(point.head_m, density_kg_m3), psc_pressure_unit)}
                     for point in selected_curve.points
                 ])
                 st.dataframe(curve_df, use_container_width=True)
                 xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in system_curve_points]
-                system_heads = [m_to_length(point.total_dynamic_head_m, psc_head_unit) for point in system_curve_points]
+                system_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.total_dynamic_head_m, density_kg_m3), psc_pressure_unit) for point in system_curve_points]
                 pump_xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in selected_curve.points]
-                pump_heads = [m_to_length(point.head_m, psc_head_unit) for point in selected_curve.points]
+                pump_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.head_m, density_kg_m3), psc_pressure_unit) for point in selected_curve.points]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
                 fig.add_trace(go.Scatter(x=pump_xs, y=pump_heads, mode="lines+markers", name=selected_curve.name))
                 if library_intersection is not None:
-                    fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit)], y=[m_to_length(library_intersection.head_m, psc_head_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                    fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit)], y=[_pressure_delta_from_kpa(_head_m_to_delta_kpa(library_intersection.head_m, density_kg_m3), psc_pressure_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
-                    c2.metric("Estimated operating head", f"{m_to_length(library_intersection.head_m, psc_head_unit):,.2f} {psc_head_unit}")
+                    c2.metric("Estimated operating pressure", f"{_pressure_delta_from_kpa(_head_m_to_delta_kpa(library_intersection.head_m, density_kg_m3), psc_pressure_unit):,.2f} {psc_pressure_unit}")
                     c3.metric("% of curve max flow", f"{library_intersection.fraction_of_curve_max_flow * 100.0:,.1f}%")
                     if library_intersection.head_error_m > 1.0:
                         st.warning("Pump/system intersection error is still noticeable on the sampled points. Add more curve points for better accuracy.")
-                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Head ({psc_head_unit})")
+                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Pressure ({psc_pressure_unit})")
                 st.plotly_chart(fig, use_container_width=True)
                 _show_notes(selected_curve.notes)
 
@@ -1999,7 +2057,7 @@ def render_hydraulics() -> None:
                 impeller_ratio = length_to_m(rerated_impeller, impeller_unit) / max(length_to_m(base_impeller, impeller_unit), 1.0e-12)
                 rerate = screen_affinity_rerate(
                     selected_curve,
-                    static_head_m=static_curve_head,
+                    static_head_m=static_curve_head_m,
                     k_factor_m_per_m3h2=k_factor,
                     speed_ratio=speed_ratio,
                     impeller_ratio=impeller_ratio,
@@ -2259,12 +2317,13 @@ def render_steam_jets() -> None:
                 map_cols[3].metric("Family column", vendor_suggestion.family_col or "(not detected)")
 
         if family_df is not None and not family_df.empty:
+            columns = list(family_df.columns)
             family_options = ["(none)"] + columns
             # Derive default column indices from vendor preset suggestion when available
             if vendor_suggestion and vendor_suggestion.confidence in ("high", "medium"):
-                name_index = columns.index(vendor_suggestion.name_col) if vendor_suggestion.name_col in columns else 0
-                x_index = columns.index(vendor_suggestion.x_col) if vendor_suggestion.x_col in columns else 0
-                y_index = columns.index(vendor_suggestion.y_col) if vendor_suggestion.y_col in columns else min(1, len(columns) - 1)
+                name_index = columns.index(vendor_suggestion.name_col) if isinstance(vendor_suggestion.name_col, str) and vendor_suggestion.name_col in columns else 0
+                x_index = columns.index(vendor_suggestion.x_col) if isinstance(vendor_suggestion.x_col, str) and vendor_suggestion.x_col in columns else 0
+                y_index = columns.index(vendor_suggestion.y_col) if isinstance(vendor_suggestion.y_col, str) and vendor_suggestion.y_col in columns else min(1, len(columns) - 1)
                 fam_index = columns.index(vendor_suggestion.family_col) + 1 if vendor_suggestion.family_col and vendor_suggestion.family_col in columns else 0
             else:
                 # Fallback to generic heuristics
@@ -2284,7 +2343,7 @@ def render_steam_jets() -> None:
                 y_label=y_col,
                 curve_name_label=curve_name_col,
                 family_label=family_label,
-                source_sheet=source_sheet,
+                source_sheet=str(source_sheet) if source_sheet is not None else None,
             )
             library_mode_options = ["Manual column mapping"]
             if normalized_library and normalized_library.curves:
@@ -3404,6 +3463,7 @@ def render_crystallizers() -> None:
             mb_sec_rates = None
             mb_sec_solids = None
 
+        mb_result_payload: dict = {}
         try:
             mb_inputs = MultiBodyCrystallizerInputs(
                 feed_rate_value=mb_feed_rate,
@@ -3419,6 +3479,7 @@ def render_crystallizers() -> None:
                 secondary_feed_solids_wt_pct=mb_sec_solids if mb_sec and mb_sec_solids else None,
             )
             mb_result = estimate_multi_body_crystallizer(mb_inputs, product="citric_acid")
+            mb_result_payload = {k: v for k, v in asdict(mb_result).items() if k != "bodies"}
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Bodies in train", str(mb_result.n_bodies))
@@ -3489,7 +3550,7 @@ def render_crystallizers() -> None:
             "body_temps": mb_body_temps,
             "working_volume": mb_working_volume,
             "include_secondary": mb_sec,
-        }, {k: v for k, v in asdict(mb_result).items() if k != "bodies"} if "mb_result" in dir() else {})
+        }, mb_result_payload)
 
 
 
@@ -4026,7 +4087,8 @@ def render_case_manager() -> None:
     cases = CASE_STORE.list_cases()
     if cases:
         selected_name = st.selectbox("Select saved case", [case["name"] for case in cases])
-        st.json(CASE_STORE.load(selected_name))
+        if selected_name is not None:
+            st.json(CASE_STORE.load(str(selected_name)))
     else:
         st.info("No saved cases yet.")
 
