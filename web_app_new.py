@@ -181,6 +181,78 @@ from engineering_app.io.workbook_inspector import inspect_workbook
 
 st.set_page_config(page_title="Engineering App", page_icon="⚙️", layout="wide")
 
+
+def _clean_input_label(label: str) -> tuple[str, str | None]:
+    text = str(label).strip()
+    unit = None
+    if "(" in text and ")" in text and text.rfind("(") < text.rfind(")"):
+        start = text.rfind("(")
+        end = text.rfind(")")
+        unit = text[start + 1 : end].strip() or None
+        text = (text[:start] + text[end + 1 :]).strip()
+    text = " ".join(text.split())
+    return text, unit
+
+
+def _default_input_help(widget: str, label: object) -> str | None:
+    if not isinstance(label, str):
+        return None
+    clean_label, unit = _clean_input_label(label)
+    if not clean_label:
+        return None
+
+    if widget == "number_input":
+        return f"Enter {clean_label} in {unit}." if unit else f"Enter {clean_label}."
+    if widget == "text_input":
+        return f"Type {clean_label}."
+    if widget == "text_area":
+        return f"Enter details for {clean_label}."
+    if widget == "selectbox":
+        return f"Select the option for {clean_label}."
+    if widget == "multiselect":
+        return f"Select one or more options for {clean_label}."
+    if widget == "radio":
+        return f"Choose one option for {clean_label}."
+    if widget == "slider":
+        return f"Adjust {clean_label}."
+    if widget == "checkbox":
+        return f"Enable or disable {clean_label}."
+    if widget == "file_uploader":
+        return f"Upload a file for {clean_label}."
+    return f"Provide {clean_label}."
+
+
+def _wrap_streamlit_input(widget_name: str) -> None:
+    original = getattr(st, widget_name, None)
+    if original is None:
+        return
+
+    def wrapped(*args, **kwargs):
+        label = kwargs.get("label")
+        if label is None and args:
+            label = args[0]
+        if "help" not in kwargs:
+            generated = _default_input_help(widget_name, label)
+            if generated:
+                kwargs["help"] = generated
+        return original(*args, **kwargs)
+
+    setattr(st, widget_name, wrapped)
+
+
+for _widget in (
+    "number_input",
+    "text_input",
+    "text_area",
+    "selectbox",
+    "multiselect",
+    "radio",
+    "slider",
+    "checkbox",
+    "file_uploader",
+):
+    _wrap_streamlit_input(_widget)
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 CASE_STORE = CaseStore(PROJECT_ROOT / "data" / "cases")
 GENERIC_CURVE_UNITS = MASS_FLOW_UNITS + VOLUMETRIC_FLOW_UNITS + PRESSURE_UNITS + TEMPERATURE_UNITS + POWER_UNITS
