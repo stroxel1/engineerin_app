@@ -1869,34 +1869,47 @@ def render_hydraulics() -> None:
         st.caption("Overlay a simple pump curve or a library/uploaded pump curve against the estimated system curve to visualize the operating point.")
         curve_tabs = st.tabs(["Simple line", "Library / upload"])
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
+        psc_col1, psc_col2 = st.columns(2)
+        psc_flow_unit = psc_col1.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_psc_flow_unit")
+        psc_head_unit = psc_col2.selectbox("Head unit", LENGTH_UNITS, index=0, key="hyd_psc_head_unit")
 
         with curve_tabs[0]:
             p1, p2, p3 = st.columns(3)
-            shutoff_head = p1.number_input("Pump shutoff head (m)", min_value=0.1, value=max(result.total_dynamic_head_m * 1.6, 20.0), key="hyd_curve_shutoff")
-            max_flow_curve = p2.number_input("Pump max flow (m3/h)", min_value=1.0, value=max(current_flow_m3_h * 1.5, 10.0), key="hyd_curve_max_flow")
-            head_at_max_flow = p3.number_input("Pump head at max flow (m)", min_value=0.0, value=max(result.total_dynamic_head_m * 0.5, 1.0), key="hyd_curve_head_at_max")
-            static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head")
-            k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
-            curve_points = build_system_curve(static_curve_head, k_factor, max_flow_curve)
-            intersection = find_pump_system_intersection(shutoff_head, head_at_max_flow, max_flow_curve, static_curve_head, k_factor)
-            xs = [point.flow_m3_h for point in curve_points]
-            system_heads = [point.total_dynamic_head_m for point in curve_points]
-            pump_heads = [shutoff_head + (head_at_max_flow - shutoff_head) * (x / max_flow_curve) for x in xs]
+            _default_shutoff = m_to_length(max(result.total_dynamic_head_m * 1.6, 20.0), psc_head_unit)
+            _default_max_flow = m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.5, 10.0), psc_flow_unit)
+            _default_head_at_max = m_to_length(max(result.total_dynamic_head_m * 0.5, 1.0), psc_head_unit)
+            _default_static_head = m_to_length(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_head_unit)
+            shutoff_head = p1.number_input(f"Pump shutoff head ({psc_head_unit})", min_value=0.0, value=_default_shutoff, key="hyd_curve_shutoff")
+            max_flow_curve = p2.number_input(f"Pump max flow ({psc_flow_unit})", min_value=0.0, value=_default_max_flow, key="hyd_curve_max_flow")
+            head_at_max_flow = p3.number_input(f"Pump head at max flow ({psc_head_unit})", min_value=0.0, value=_default_head_at_max, key="hyd_curve_head_at_max")
+            static_curve_head = st.number_input(f"System static head ({psc_head_unit})", value=_default_static_head, key="hyd_curve_static_head")
+            shutoff_head_m = length_to_m(shutoff_head, psc_head_unit)
+            max_flow_curve_m3_h = volumetric_flow_to_m3_h(max_flow_curve, psc_flow_unit)
+            head_at_max_flow_m = length_to_m(head_at_max_flow, psc_head_unit)
+            static_curve_head_m = length_to_m(static_curve_head, psc_head_unit)
+            k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
+            curve_points = build_system_curve(static_curve_head_m, k_factor, max_flow_curve_m3_h)
+            intersection = find_pump_system_intersection(shutoff_head_m, head_at_max_flow_m, max_flow_curve_m3_h, static_curve_head_m, k_factor)
+            xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in curve_points]
+            system_heads = [m_to_length(point.total_dynamic_head_m, psc_head_unit) for point in curve_points]
+            pump_heads = [m_to_length(shutoff_head_m + (head_at_max_flow_m - shutoff_head_m) * (point.flow_m3_h / max(max_flow_curve_m3_h, 1e-9)), psc_head_unit) for point in curve_points]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
             fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
             if intersection is not None:
-                fig.add_trace(go.Scatter(x=[intersection.flow_m3_h], y=[intersection.total_dynamic_head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit)], y=[m_to_length(intersection.total_dynamic_head_m, psc_head_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                 m1, m2 = st.columns(2)
-                m1.metric("Estimated operating flow", f"{intersection.flow_m3_h:,.1f} m3/h")
-                m2.metric("Estimated operating head", f"{intersection.total_dynamic_head_m:,.2f} m")
-            fig.update_layout(title="Pump vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+                m1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
+                m2.metric("Estimated operating head", f"{m_to_length(intersection.total_dynamic_head_m, psc_head_unit):,.2f} {psc_head_unit}")
+            fig.update_layout(title="Pump vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Head ({psc_head_unit})")
             st.plotly_chart(fig, use_container_width=True)
 
         with curve_tabs[1]:
             st.caption("Use a built-in pump curve or upload vendor flow-head points from CSV/Excel, then compare that curve against the estimated system curve.")
-            static_curve_head = st.number_input("System static head (m)", value=max(elevation_change if elevation_change > 0 else 0.0, 0.0), key="hyd_curve_static_head_adv")
-            k_factor = max((result.total_dynamic_head_m - static_curve_head) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
+            _adv_default_static = m_to_length(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_head_unit)
+            static_curve_head = st.number_input(f"System static head ({psc_head_unit})", value=_adv_default_static, key="hyd_curve_static_head_adv")
+            static_curve_head_m = length_to_m(static_curve_head, psc_head_unit)
+            k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
             curve_source = st.radio("Pump curve source", ["Built-in library", "Upload CSV/Excel", "Manual table"], horizontal=True, key="hyd_curve_source")
 
             selected_curve = None
@@ -1927,42 +1940,45 @@ def render_hydraulics() -> None:
                         curve_family = st.text_input("Curve family / pump tag", value="Uploaded vendor curve", key="hyd_curve_upload_family")
                         selected_curve = build_pump_curve_from_xy_rows(curve_name, uploaded_df.to_dict(orient="records"), flow_col, head_col, family=curve_family)
             else:
+                _mc_flow_col = f"flow ({psc_flow_unit})"
+                _mc_head_col = f"head ({psc_head_unit})"
                 manual_curve = pd.DataFrame([
-                    {"flow_m3_h": 0.0, "head_m": max(result.total_dynamic_head_m * 1.7, 25.0)},
-                    {"flow_m3_h": max(current_flow_m3_h * 0.5, 10.0), "head_m": max(result.total_dynamic_head_m * 1.2, 15.0)},
-                    {"flow_m3_h": max(current_flow_m3_h, 20.0), "head_m": max(result.total_dynamic_head_m * 0.95, 8.0)},
-                    {"flow_m3_h": max(current_flow_m3_h * 1.35, 30.0), "head_m": max(result.total_dynamic_head_m * 0.65, 3.0)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(0.0, psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 1.7, 25.0), psc_head_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 0.5, 10.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 1.2, 15.0), psc_head_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h, 20.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 0.95, 8.0), psc_head_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.35, 30.0), psc_flow_unit), _mc_head_col: m_to_length(max(result.total_dynamic_head_m * 0.65, 3.0), psc_head_unit)},
                 ])
                 edited_curve = st.data_editor(manual_curve, num_rows="dynamic", use_container_width=True, key="hyd_curve_manual_editor")
                 curve_name = st.text_input("Curve name", value="Manual pump curve", key="hyd_curve_manual_name")
                 curve_family = st.text_input("Curve family / pump tag", value="Manual entry", key="hyd_curve_manual_family")
-                selected_curve = build_pump_curve_from_xy_rows(curve_name, edited_curve.to_dict(orient="records"), "flow_m3_h", "head_m", family=curve_family)
+                _mc_si_rows = [{"flow_m3_h": volumetric_flow_to_m3_h(row.get(_mc_flow_col) or 0.0, psc_flow_unit), "head_m": length_to_m(row.get(_mc_head_col) or 0.0, psc_head_unit)} for row in edited_curve.to_dict(orient="records")]
+                selected_curve = build_pump_curve_from_xy_rows(curve_name, _mc_si_rows, "flow_m3_h", "head_m", family=curve_family)
 
             if selected_curve is not None:
                 max_curve_flow = selected_curve.points[-1].flow_m3_h
-                system_curve_points = build_system_curve(static_curve_head, k_factor, max_curve_flow)
-                library_intersection = find_curve_system_intersection(selected_curve, static_curve_head, k_factor)
+                system_curve_points = build_system_curve(static_curve_head_m, k_factor, max_curve_flow)
+                library_intersection = find_curve_system_intersection(selected_curve, static_curve_head_m, k_factor)
                 curve_df = pd.DataFrame([
-                    {"Flow (m3/h)": point.flow_m3_h, "Pump head (m)": point.head_m}
+                    {f"Flow ({psc_flow_unit})": m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit), f"Pump head ({psc_head_unit})": m_to_length(point.head_m, psc_head_unit)}
                     for point in selected_curve.points
                 ])
                 st.dataframe(curve_df, use_container_width=True)
-                xs = [point.flow_m3_h for point in system_curve_points]
-                system_heads = [point.total_dynamic_head_m for point in system_curve_points]
-                pump_xs = [point.flow_m3_h for point in selected_curve.points]
-                pump_heads = [point.head_m for point in selected_curve.points]
+                xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in system_curve_points]
+                system_heads = [m_to_length(point.total_dynamic_head_m, psc_head_unit) for point in system_curve_points]
+                pump_xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in selected_curve.points]
+                pump_heads = [m_to_length(point.head_m, psc_head_unit) for point in selected_curve.points]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
                 fig.add_trace(go.Scatter(x=pump_xs, y=pump_heads, mode="lines+markers", name=selected_curve.name))
                 if library_intersection is not None:
-                    fig.add_trace(go.Scatter(x=[library_intersection.flow_m3_h], y=[library_intersection.head_m], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                    fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit)], y=[m_to_length(library_intersection.head_m, psc_head_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("Estimated operating flow", f"{library_intersection.flow_m3_h:,.1f} m3/h")
-                    c2.metric("Estimated operating head", f"{library_intersection.head_m:,.2f} m")
+                    c1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
+                    c2.metric("Estimated operating head", f"{m_to_length(library_intersection.head_m, psc_head_unit):,.2f} {psc_head_unit}")
                     c3.metric("% of curve max flow", f"{library_intersection.fraction_of_curve_max_flow * 100.0:,.1f}%")
                     if library_intersection.head_error_m > 1.0:
                         st.warning("Pump/system intersection error is still noticeable on the sampled points. Add more curve points for better accuracy.")
-                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title="Flow (m3/h)", yaxis_title="Head (m)")
+                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Head ({psc_head_unit})")
                 st.plotly_chart(fig, use_container_width=True)
                 _show_notes(selected_curve.notes)
 
