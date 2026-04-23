@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -1822,7 +1823,13 @@ def render_hydraulics() -> None:
                 )
 
                 if bep_result.reliability_risk:
-                    st.warning(bep_result.reliability_risk)
+                    st.warning(
+                        f"{bep_result.reliability_risk} "
+                        f"Current point: {m3_h_to_volumetric_flow(cur_flow_m3_h, flow_unit):,.1f} {flow_unit} @ "
+                        f"{m_to_length(cur_head_m, field_head_output_unit):,.1f} {field_head_output_unit}. "
+                        f"Estimated BEP: {m3_h_to_volumetric_flow(bep_result.bep_flow_m3_h, flow_unit):,.1f} {flow_unit} @ "
+                        f"{m_to_length(bep_result.bep_head_m, field_head_output_unit):,.1f} {field_head_output_unit}."
+                    )
 
                 b_fig = go.Figure()
                 b_fig.add_trace(go.Scatter(
@@ -2341,7 +2348,12 @@ def render_hydraulics() -> None:
                     c2.metric(f"Estimated operating {_psc_ylabel.lower()}", f"{_psc_head_from_m(library_intersection.head_m, psc_pressure_unit, density_kg_m3):,.2f} {psc_pressure_unit}")
                     c3.metric("% of curve max flow", f"{library_intersection.fraction_of_curve_max_flow * 100.0:,.1f}%")
                     if library_intersection.head_error_m > 1.0:
-                        st.warning("Pump/system intersection error is still noticeable on the sampled points. Add more curve points for better accuracy.")
+                        st.warning(
+                            f"Pump/system intersection error is still noticeable on sampled points "
+                            f"({ _psc_head_from_m(library_intersection.head_error_m, psc_pressure_unit, density_kg_m3):,.2f} {psc_pressure_unit}; "
+                            f"screening threshold is {_psc_head_from_m(1.0, psc_pressure_unit, density_kg_m3):,.2f} {psc_pressure_unit}). "
+                            f"Add more curve points for better accuracy."
+                        )
                 fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"{_psc_ylabel} ({psc_pressure_unit})")
                 st.plotly_chart(fig, use_container_width=True)
                 _show_notes(selected_curve.notes)
@@ -4208,6 +4220,13 @@ def render_pump_sizing() -> None:
         suction_static_head = source_level
         discharge_static_head = discharge_level
 
+    suction_static_head_m = length_to_m(suction_static_head, head_unit)
+    discharge_static_head_m = length_to_m(discharge_static_head, head_unit)
+    required_npshr_m = length_to_m(required_npshr, head_unit) if required_npshr_enabled else None
+    curve_shutoff_head_m = length_to_m(curve_shutoff, head_unit) if enable_curve else None
+    curve_max_flow_m3_h = volumetric_flow_to_m3_h(curve_max_flow, flow_unit) if enable_curve else None
+    curve_head_at_max_flow_m = length_to_m(curve_head_at_max, head_unit) if enable_curve else None
+
     try:
         result = calculate_pump_sizing(
             PumpSizingInputs(
@@ -4216,8 +4235,8 @@ def render_pump_sizing() -> None:
                 density_kg_m3=density_kg_m3,
                 viscosity_cp=viscosity_cp,
                 liquid_temperature_c=liquid_temperature_c,
-                suction_static_head_m=length_to_m(suction_static_head, head_unit),
-                discharge_static_head_m=length_to_m(discharge_static_head, head_unit),
+                suction_static_head_m=suction_static_head_m,
+                discharge_static_head_m=discharge_static_head_m,
                 suction_pipe_length_m=length_to_m(suction_pipe_length + suction_equiv_len, length_unit),
                 discharge_pipe_length_m=length_to_m(discharge_pipe_length + discharge_equiv_len, length_unit),
                 suction_pipe_id_mm=length_to_m(suction_id_value, suction_id_unit) * 1000.0,
@@ -4231,11 +4250,11 @@ def render_pump_sizing() -> None:
                 pump_efficiency_fraction=pump_efficiency,
                 motor_efficiency_fraction=motor_efficiency,
                 motor_service_factor=service_factor,
-                required_npshr_m=length_to_m(required_npshr, head_unit) if required_npshr_enabled else None,
+                required_npshr_m=required_npshr_m,
                 vapor_pressure_kpa_abs=pressure_to_kpa_abs(vapor_pressure_value, pressure_unit) if vapor_override_enabled else None,
-                curve_shutoff_head_m=length_to_m(curve_shutoff, head_unit) if enable_curve else None,
-                curve_max_flow_m3_h=volumetric_flow_to_m3_h(curve_max_flow, flow_unit) if enable_curve else None,
-                curve_head_at_max_flow_m=length_to_m(curve_head_at_max, head_unit) if enable_curve else None,
+                curve_shutoff_head_m=curve_shutoff_head_m,
+                curve_max_flow_m3_h=curve_max_flow_m3_h,
+                curve_head_at_max_flow_m=curve_head_at_max_flow_m,
                 base_speed_rpm=base_speed if base_speed > 0.0 else None,
                 new_speed_rpm=new_speed if new_speed > 0.0 else None,
                 base_impeller_diameter_m=length_to_m(base_impeller, impeller_unit) if base_impeller > 0.0 else None,
@@ -4275,9 +4294,118 @@ def render_pump_sizing() -> None:
             c1.metric("Curve head at duty flow", f"{m_to_length(result.curve_head_at_duty_m, head_unit):,.2f} {head_unit}")
             c2.metric("Curve head margin", f"{m_to_length(result.curve_head_margin_m, head_unit):,.2f} {head_unit}")
 
-        if result.warnings:
+        def _format_pump_sizing_warnings() -> list[str]:
+            formatted: list[str] = []
+            length_scale = m_to_length(1.0, length_unit)
+            velocity_unit = f"{length_unit}/s"
+
+            def _fmt_head(value_m: float, decimals: int = 2) -> str:
+                return f"{m_to_length(value_m, head_unit):,.{decimals}f} {head_unit}"
+
+            def _fmt_flow(value_m3_h: float, decimals: int = 1) -> str:
+                return f"{m3_h_to_volumetric_flow(value_m3_h, flow_unit):,.{decimals}f} {flow_unit}"
+
+            def _fmt_len(value_m: float, decimals: int = 1) -> str:
+                return f"{m_to_length(value_m, length_unit):,.{decimals}f} {length_unit}"
+
+            if suction_static_head_m < 0.0:
+                lift_m = abs(suction_static_head_m)
+                flooded_add_m = result.npshr_m if required_npshr_enabled else 1.5
+                min_flooded_m = lift_m + flooded_add_m
+                formatted.append(
+                    f"Suction lift of {_fmt_head(lift_m)} is present. "
+                    f"Ensure the pump is self-priming or has a foot valve. "
+                    f"Raising the suction source by at least {_fmt_head(min_flooded_m, 1)} would eliminate lift and improve NPSHa."
+                )
+
+            if result.suction_velocity_m_s > 1.8:
+                target_area_m2 = (result.required_flow_m3_h / 3600.0) / 1.2
+                target_id_m = (4.0 * target_area_m2 / math.pi) ** 0.5
+                formatted.append(
+                    f"Suction velocity is {result.suction_velocity_m_s * length_scale:,.2f} {velocity_unit} "
+                    f"(target <= {1.8 * length_scale:,.2f} {velocity_unit}). "
+                    f"Increase suction pipe diameter to at least {_fmt_len(target_id_m, 2)} "
+                    f"to bring velocity near {1.2 * length_scale:,.2f} {velocity_unit} and reduce NPSHa losses."
+                )
+
+            if result.discharge_velocity_m_s > 3.5:
+                target_area_m2 = (result.required_flow_m3_h / 3600.0) / 2.5
+                target_id_m = (4.0 * target_area_m2 / math.pi) ** 0.5
+                formatted.append(
+                    f"Discharge velocity is {result.discharge_velocity_m_s * length_scale:,.2f} {velocity_unit} "
+                    f"(target <= {3.5 * length_scale:,.2f} {velocity_unit}). "
+                    f"Increase discharge pipe diameter to at least {_fmt_len(target_id_m, 2)} "
+                    f"to bring velocity near {2.5 * length_scale:,.2f} {velocity_unit} and reduce friction losses."
+                )
+
+            if result.npsh_margin_m < 0.0:
+                additional_head_m = abs(result.npsh_margin_m) + 0.5
+                formatted.append(
+                    f"NPSHa ({_fmt_head(result.npsha_m)}) is {_fmt_head(abs(result.npsh_margin_m))} below NPSHr ({_fmt_head(result.npshr_m)}); cavitation is likely. "
+                    f"Recommended fixes: (1) raise suction source by at least {_fmt_head(additional_head_m, 1)}, "
+                    f"(2) increase suction pipe diameter to cut suction-line losses (current loss: {_fmt_head(result.suction_line_loss_m)}), or "
+                    f"(3) ask the vendor for a lower-NPSHr impeller trim."
+                )
+            elif result.npsh_margin_ratio < minimum_npsh_ratio:
+                needed_npsha_m = result.npshr_m * minimum_npsh_ratio
+                shortfall_m = needed_npsha_m - result.npsha_m
+                formatted.append(
+                    f"NPSH margin ratio is {result.npsh_margin_ratio:,.2f}x (target >= {minimum_npsh_ratio:,.2f}x). "
+                    f"NPSHa needs to increase by {_fmt_head(shortfall_m)} to meet target. "
+                    f"Options: raise suction source level, increase suction pipe diameter, "
+                    f"or reduce suction-line fittings (current suction loss: {_fmt_head(result.suction_line_loss_m)})."
+                )
+
+            if result.curve_head_margin_m is not None and result.curve_head_margin_m < 0.0 and result.curve_head_at_duty_m is not None:
+                head_shortfall_m = abs(result.curve_head_margin_m)
+                formatted.append(
+                    f"Pump curve head at duty flow is {_fmt_head(result.curve_head_at_duty_m)}, "
+                    f"which is {_fmt_head(head_shortfall_m)} short of required TDH ({_fmt_head(result.required_tdh_m)}). "
+                    f"To resolve: (1) select a pump that provides at least {_fmt_head(result.required_tdh_m, 1)} at {_fmt_flow(result.required_flow_m3_h)}, "
+                    f"(2) increase impeller diameter, or "
+                    f"(3) reduce system head by enlarging discharge pipe or removing fittings "
+                    f"(current discharge loss: {_fmt_head(result.discharge_line_loss_m)})."
+                )
+
+            if result.duty_flow_fraction_of_bep is not None and result.estimated_bep_flow_m3_h is not None and (
+                result.duty_flow_fraction_of_bep < 0.8 or result.duty_flow_fraction_of_bep > 1.1
+            ):
+                bep_flow_m3_h = result.estimated_bep_flow_m3_h
+                target_min_flow = 0.80 * bep_flow_m3_h
+                target_max_flow = 1.10 * bep_flow_m3_h
+                if result.duty_flow_fraction_of_bep < 0.8:
+                    formatted.append(
+                        f"Duty flow ({_fmt_flow(result.required_flow_m3_h)}) is only {result.duty_flow_fraction_of_bep * 100.0:,.0f}% of estimated BEP "
+                        f"({_fmt_flow(bep_flow_m3_h)}). The pump is likely oversized. "
+                        f"Recommended fixes: (1) select a smaller pump with BEP closer to {_fmt_flow(result.required_flow_m3_h)}, "
+                        f"(2) trim impeller to move BEP into {_fmt_flow(target_min_flow)} to {_fmt_flow(target_max_flow)}, or "
+                        f"(3) use a VFD to reduce speed and shift BEP toward the duty point."
+                    )
+                else:
+                    formatted.append(
+                        f"Duty flow ({_fmt_flow(result.required_flow_m3_h)}) is {result.duty_flow_fraction_of_bep * 100.0:,.0f}% of estimated BEP "
+                        f"({_fmt_flow(bep_flow_m3_h)}). The pump is running past BEP (run-out region). "
+                        f"Recommended fixes: (1) select a larger pump curve so BEP lands within {_fmt_flow(target_min_flow)} to {_fmt_flow(target_max_flow)}, or "
+                        f"(2) increase impeller diameter if hydraulically acceptable."
+                    )
+
+            if curve_shutoff_head_m is not None and result.required_tdh_m >= 0.95 * max(curve_shutoff_head_m, 1.0e-9):
+                margin_pct = (1.0 - result.required_tdh_m / max(curve_shutoff_head_m, 1.0e-9)) * 100.0
+                min_shutoff_m = result.required_tdh_m / 0.85
+                formatted.append(
+                    f"Required TDH ({_fmt_head(result.required_tdh_m)}) is within {margin_pct:,.1f}% of shutoff head ({_fmt_head(curve_shutoff_head_m)}). "
+                    f"This is near dead-head operation. Select a pump with shutoff head of at least {_fmt_head(min_shutoff_m, 1)} "
+                    f"(target operating TDH <= 85% of shutoff head)."
+                )
+
+            if not formatted and result.warnings:
+                return result.warnings
+            return formatted
+
+        display_warnings = _format_pump_sizing_warnings()
+        if display_warnings:
             st.subheader("Warnings")
-            for warning in result.warnings:
+            for warning in display_warnings:
                 st.warning(warning)
         else:
             st.success("No major sizing warnings were triggered for the entered screening inputs.")
