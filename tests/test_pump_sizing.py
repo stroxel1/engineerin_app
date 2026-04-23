@@ -60,7 +60,7 @@ class PumpSizingTests(unittest.TestCase):
         inputs.required_npshr_m = 12.0
         result = calculate_pump_sizing(inputs)
         self.assertLess(result.npsh_margin_m, 0.0)
-        self.assertTrue(any("NPSHa is below NPSHr" in item for item in result.warnings))
+        self.assertTrue(any("below NPSHr" in item for item in result.warnings))
 
     def test_atmospheric_pressure_decreases_with_elevation(self):
         sea_level = atmospheric_pressure_kpa_abs_from_elevation(0.0)

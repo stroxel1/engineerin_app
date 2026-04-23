@@ -242,22 +242,93 @@ def calculate_pump_sizing(inputs: PumpSizingInputs) -> PumpSizingResult:
     assumptions: list[str] = []
 
     if inputs.suction_static_head_m < 0.0:
-        warnings.append("Suction lift is present; verify priming and suction line design carefully.")
+        lift_m = abs(inputs.suction_static_head_m)
+        min_flooded_m = lift_m + (npshr_m if inputs.required_npshr_m is not None else 1.5)
+        warnings.append(
+            f"Suction lift of {lift_m:.2f} m is present. "
+            f"Ensure the pump is self-priming or has a foot valve. "
+            f"Raising the suction source by at least {min_flooded_m:.1f} m would eliminate the lift and improve NPSHa."
+        )
     if suction.velocity_m_s > 1.8:
-        warnings.append("Suction velocity is high (>1.8 m/s); cavitation risk and suction losses may increase.")
+        # Recommend the pipe ID that would bring velocity to ~1.2 m/s
+        target_area_m2 = (inputs.flow_m3_h / 3600.0) / 1.2
+        target_id_mm = ((target_area_m2 / 3.14159265) ** 0.5) * 2000.0
+        warnings.append(
+            f"Suction velocity is {suction.velocity_m_s:.2f} m/s (target ≤ 1.8 m/s). "
+            f"Increase the suction pipe diameter to at least {target_id_mm:.0f} mm ID "
+            f"to bring velocity down to ~1.2 m/s and reduce NPSHa losses."
+        )
     if discharge.velocity_m_s > 3.5:
-        warnings.append("Discharge velocity is high (>3.5 m/s); friction losses and wear may be excessive.")
+        target_area_m2 = (inputs.flow_m3_h / 3600.0) / 2.5
+        target_id_mm = ((target_area_m2 / 3.14159265) ** 0.5) * 2000.0
+        warnings.append(
+            f"Discharge velocity is {discharge.velocity_m_s:.2f} m/s (target ≤ 3.5 m/s). "
+            f"Increase discharge pipe diameter to at least {target_id_mm:.0f} mm ID "
+            f"to bring velocity down to ~2.5 m/s and reduce friction losses."
+        )
     if npsh_margin_m < 0.0:
-        warnings.append("NPSHa is below NPSHr; cavitation risk is high.")
+        additional_head_m = abs(npsh_margin_m) + 0.5
+        warnings.append(
+            f"NPSHa ({npsha_m:.2f} m) is {abs(npsh_margin_m):.2f} m below NPSHr ({npshr_m:.2f} m); cavitation is likely. "
+            f"Recommended fixes: (1) raise the suction source level by at least {additional_head_m:.1f} m, "
+            f"(2) increase suction pipe diameter to cut suction-line friction losses "
+            f"(current loss: {suction.head_loss_m:.2f} m), or "
+            f"(3) confirm with the vendor whether a lower-NPSHr impeller trim is available."
+        )
     elif npsh_margin_ratio < inputs.minimum_npsh_margin_ratio:
-        warnings.append("NPSH margin ratio is below the selected minimum acceptance target.")
+        needed_npsha_m = npshr_m * inputs.minimum_npsh_margin_ratio
+        shortfall_m = needed_npsha_m - npsha_m
+        warnings.append(
+            f"NPSH margin ratio is {npsh_margin_ratio:.2f}x (target ≥ {inputs.minimum_npsh_margin_ratio:.2f}x). "
+            f"NPSHa needs to increase by {shortfall_m:.2f} m to meet the margin target. "
+            f"Options: raise suction source level, increase suction pipe diameter "
+            f"(current suction loss: {suction.head_loss_m:.2f} m), or reduce suction-line fittings."
+        )
 
     if curve_head_margin_m is not None and curve_head_margin_m < 0.0:
-        warnings.append("Pump curve head at duty flow is below required TDH; selected pump is likely undersized at this duty.")
+        head_shortfall_m = abs(curve_head_margin_m)
+        # Fraction of current shutoff head that would satisfy the duty
+        required_shutoff_fraction = required_tdh_m / max(inputs.curve_shutoff_head_m or required_tdh_m, 1.0e-9)
+        warnings.append(
+            f"Pump curve head at duty flow is {abs(curve_head_at_duty_m):.2f} m, "
+            f"which is {head_shortfall_m:.2f} m short of the required TDH ({required_tdh_m:.2f} m). "
+            f"To resolve: (1) select a pump whose curve provides at least {required_tdh_m:.1f} m at "
+            f"{inputs.flow_m3_h:.1f} m³/h duty flow, "
+            f"(2) increase impeller diameter (higher shutoff and head throughout the curve), or "
+            f"(3) reduce system head by enlarging the discharge pipe or reducing fittings "
+            f"(current discharge loss: {discharge.head_loss_m:.2f} m)."
+        )
     if duty_flow_fraction_of_bep is not None and (duty_flow_fraction_of_bep < 0.8 or duty_flow_fraction_of_bep > 1.1):
-        warnings.append("Estimated duty point is far from BEP (outside ~80-110%); reliability and efficiency may suffer.")
+        bep_flow_m3_h = estimated_bep_flow_m3_h or 0.0
+        if duty_flow_fraction_of_bep < 0.8:
+            target_min_flow = 0.80 * bep_flow_m3_h
+            target_max_flow = 1.10 * bep_flow_m3_h
+            warnings.append(
+                f"Duty flow ({inputs.flow_m3_h:.1f} m³/h) is only {duty_flow_fraction_of_bep * 100.0:.0f}% of estimated BEP "
+                f"({bep_flow_m3_h:.1f} m³/h). The pump is oversized for this duty. "
+                f"Recommended fixes: (1) select a smaller pump whose BEP is closer to {inputs.flow_m3_h:.1f} m³/h, "
+                f"(2) trim the impeller to reduce BEP flow into the {target_min_flow:.1f}–{target_max_flow:.1f} m³/h range, or "
+                f"(3) add a VFD to reduce speed and shift the BEP toward the operating point."
+            )
+        else:
+            target_min_flow = 0.80 * bep_flow_m3_h
+            target_max_flow = 1.10 * bep_flow_m3_h
+            warnings.append(
+                f"Duty flow ({inputs.flow_m3_h:.1f} m³/h) is {duty_flow_fraction_of_bep * 100.0:.0f}% of estimated BEP "
+                f"({bep_flow_m3_h:.1f} m³/h). The pump is running past BEP (run-out). "
+                f"Recommended fixes: (1) select a pump with a higher max-flow curve so BEP sits in the "
+                f"{target_min_flow:.1f}–{target_max_flow:.1f} m³/h range, or "
+                f"(2) increase impeller diameter to shift the BEP to a higher flow."
+            )
     if required_tdh_m >= 0.95 * max(inputs.curve_shutoff_head_m or 0.0, 1.0e-9):
-        warnings.append("Required TDH is close to shutoff head; deadhead/throttling risk should be reviewed.")
+        margin_pct = (1.0 - required_tdh_m / max(inputs.curve_shutoff_head_m or required_tdh_m, 1.0e-9)) * 100.0
+        min_shutoff_m = required_tdh_m / 0.85
+        warnings.append(
+            f"Required TDH ({required_tdh_m:.2f} m) is within {margin_pct:.1f}% of shutoff head "
+            f"({inputs.curve_shutoff_head_m:.2f} m). At this operating point the pump is near dead-head. "
+            f"Select a pump with a shutoff head of at least {min_shutoff_m:.1f} m "
+            f"(current TDH should not exceed ~85% of shutoff head)."
+        )
 
     if assumed_npshr:
         assumptions.append("NPSHr was not provided. Preliminary estimate used NPSHr = max(1.5 m, 3% of TDH).")
