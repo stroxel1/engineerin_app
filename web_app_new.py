@@ -194,6 +194,133 @@ def _clean_input_label(label: str) -> tuple[str, str | None]:
     return text, unit
 
 
+# ---------------------------------------------------------------------------
+# Help-text lookup: specific engineering descriptions keyed by lower-case
+# clean label text.  Partial-match fallback is used when no exact key found.
+# ---------------------------------------------------------------------------
+_HELP_TEXT: dict[str, str] = {
+    # ── Hydraulics – general inputs ─────────────────────────────────────────
+    "flow": "Volumetric flow rate through the pipe.",
+    "density": (
+        "Mass per unit volume of the fluid. Water at 20 °C ≈ 998 kg/m³. "
+        "Used to compute velocity, head, and pressure drop."
+    ),
+    "viscosity": (
+        "Fluid resistance to shear flow. Water at 20 °C ≈ 1 cP. "
+        "Affects the Reynolds number and Darcy friction factor."
+    ),
+    "pipe length": "Total straight run length of the pipe segment.",
+    "pipe id": (
+        "Inside (bore) diameter of the pipe. "
+        "Determines fluid velocity and friction losses."
+    ),
+    "roughness": (
+        "Absolute pipe-wall roughness. "
+        "Stainless steel is typically 0.045 mm; new carbon steel ~0.046 mm."
+    ),
+    "elevation change": (
+        "Vertical rise from pipe inlet to outlet. "
+        "Positive = pumping uphill; adds directly to TDH."
+    ),
+    "additional user-entered k": (
+        "Extra resistance coefficient K for any fittings or accessories "
+        "not captured in the standard fitting list above."
+    ),
+    # ── Pump / System curve ─────────────────────────────────────────────────
+    "pump shutoff pressure rise": (
+        "The pressure rise the pump produces at zero (shut-off) flow. "
+        "Also called the shut-off head. "
+        "Typically 1.2–1.6× the design-point TDH on a standard centrifugal curve. "
+        "Used as the Y-intercept of the simplified pump curve."
+    ),
+    "pump shutoff tdh": (
+        "Total Dynamic Head the pump produces at zero (shut-off) flow. "
+        "Typically 1.2–1.6× the design-point TDH on a standard centrifugal curve. "
+        "Used as the Y-intercept of the simplified pump curve."
+    ),
+    "pump max flow": (
+        "Maximum (end-of-curve / run-out) flow shown on the pump curve. "
+        "Used as the X-axis end point for plotting and intersection logic."
+    ),
+    "pump pressure at max flow": (
+        "Pressure rise the pump produces at the maximum curve flow. "
+        "Typically the lowest point on the pump curve."
+    ),
+    "pump tdh at max flow": (
+        "TDH the pump produces at the maximum curve flow. "
+        "Typically the lowest point on the pump curve."
+    ),
+    "system static pressure rise": (
+        "The fixed (flow-independent) component of system TDH: "
+        "elevation head plus any constant back-pressure. "
+        "The system curve starts at this value at zero flow."
+    ),
+    "system static tdh": (
+        "Fixed component of system TDH at zero flow: "
+        "elevation head plus any constant back-pressure. "
+        "The system curve starts here and rises with the square of flow."
+    ),
+    "y-axis unit": (
+        "Display unit for the vertical axis. "
+        "Choose a pressure unit (kPa, psi, bar) OR a head/TDH unit (ft, m). "
+        "Head units avoid density dependence and match vendor data-sheets directly."
+    ),
+    # ── Pump rerate / affinity ───────────────────────────────────────────────
+    "base speed": "Pump shaft speed corresponding to the original/baseline curve.",
+    "rerated speed": (
+        "New shaft speed after a VFD adjustment or mechanical rerate. "
+        "Affinity laws scale flow ∝ N, head ∝ N², power ∝ N³."
+    ),
+    "base impeller diameter": "Original impeller trim diameter.",
+    "rerated impeller diameter": (
+        "New impeller trim diameter after a re-cut. "
+        "Affinity laws scale flow ∝ D, head ∝ D², power ∝ D³."
+    ),
+    # ── NPSHa ────────────────────────────────────────────────────────────────
+    "suction pressure": "Absolute pressure at the suction source (vessel or supply header).",
+    "suction line losses": (
+        "Total pressure drop between the suction source and the pump suction flange "
+        "due to pipe friction and fittings."
+    ),
+    "vapor pressure": (
+        "Boiling pressure of the liquid at the operating temperature. "
+        "NPSHa is reduced when the liquid approaches vaporization."
+    ),
+    # ── Control valve ────────────────────────────────────────────────────────
+    "valve inlet pressure": "Absolute pressure immediately upstream of the control valve.",
+    "valve fl": (
+        "Liquid pressure recovery factor for the valve trim. "
+        "Globe valves ≈ 0.9; high-recovery rotary trims are lower. "
+        "Obtain from the vendor's published data."
+    ),
+    # ── Steam / evaporator ───────────────────────────────────────────────────
+    "steam flow": "Mass flow rate of steam to/from the process.",
+    "steam pressure": "Steam header or supply pressure.",
+    "brix": (
+        "Degrees Brix – grams of dissolved solids per 100 g of solution. "
+        "For sucrose solutions Brix ≈ weight-percent solids."
+    ),
+    "feed brix": "Solids concentration of the feed stream entering the evaporator.",
+    "product brix": "Target solids concentration of the evaporator product.",
+    "evaporation": "Water removed from the process per unit time.",
+    "steam economy": (
+        "kg of water evaporated per kg of steam consumed. "
+        "A higher value indicates more efficient use of steam."
+    ),
+    # ── General ──────────────────────────────────────────────────────────────
+    "flow unit": "Units for the volumetric flow rate input.",
+    "pressure unit": "Units for pressure or differential-pressure values.",
+    "density unit": "Units for fluid mass density.",
+    "viscosity unit": "Units for dynamic viscosity.",
+    "temperature": "Fluid temperature at the operating condition.",
+    "pipe size": "Nominal pipe size; select from schedule 10S stainless presets.",
+    "pipe basis": (
+        "Choose a schedule 10S stainless preset (auto-fills ID) "
+        "or enter a custom inside diameter."
+    ),
+}
+
+
 def _default_input_help(widget: str, label: object) -> str | None:
     if not isinstance(label, str):
         return None
@@ -201,6 +328,17 @@ def _default_input_help(widget: str, label: object) -> str | None:
     if not clean_label:
         return None
 
+    # 1. Exact match (case-insensitive)
+    lower = clean_label.lower()
+    if lower in _HELP_TEXT:
+        return _HELP_TEXT[lower]
+
+    # 2. Partial match – return the first key that appears in the label
+    for key, text in _HELP_TEXT.items():
+        if key in lower:
+            return text
+
+    # 3. Generic fallback
     if widget == "number_input":
         return f"Enter {clean_label} in {unit}." if unit else f"Enter {clean_label}."
     if widget == "text_input":
@@ -222,6 +360,19 @@ def _default_input_help(widget: str, label: object) -> str | None:
     return f"Provide {clean_label}."
 
 
+_INPUT_WIDGETS = (
+    "number_input",
+    "text_input",
+    "text_area",
+    "selectbox",
+    "multiselect",
+    "radio",
+    "slider",
+    "checkbox",
+    "file_uploader",
+)
+
+
 def _wrap_streamlit_input(widget_name: str) -> None:
     original = getattr(st, widget_name, None)
     if original is None:
@@ -240,18 +391,32 @@ def _wrap_streamlit_input(widget_name: str) -> None:
     setattr(st, widget_name, wrapped)
 
 
-for _widget in (
-    "number_input",
-    "text_input",
-    "text_area",
-    "selectbox",
-    "multiselect",
-    "radio",
-    "slider",
-    "checkbox",
-    "file_uploader",
-):
+for _widget in _INPUT_WIDGETS:
     _wrap_streamlit_input(_widget)
+
+# Also patch DeltaGenerator so that column-based calls (col.number_input, etc.)
+# receive the same auto-generated help tooltips.
+try:
+    from streamlit.delta_generator import DeltaGenerator as _DeltaGenerator
+
+    def _make_dg_wrapper(orig_method, wname: str):
+        def _dg_wrapped(self, *args, **kwargs):
+            label = kwargs.get("label")
+            if label is None and args:
+                label = args[0]
+            if "help" not in kwargs:
+                generated = _default_input_help(wname, label)
+                if generated:
+                    kwargs["help"] = generated
+            return orig_method(self, *args, **kwargs)
+        return _dg_wrapped
+
+    for _widget in _INPUT_WIDGETS:
+        _orig = getattr(_DeltaGenerator, _widget, None)
+        if _orig is not None:
+            setattr(_DeltaGenerator, _widget, _make_dg_wrapper(_orig, _widget))
+except Exception:
+    pass  # Graceful degradation if Streamlit internals change
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CASE_STORE = CaseStore(PROJECT_ROOT / "data" / "cases")
@@ -305,6 +470,31 @@ def _head_m_to_delta_kpa(head_m: float, density_kg_m3: float) -> float:
 
 def _delta_kpa_to_head_m(delta_kpa: float, density_kg_m3: float) -> float:
     return delta_kpa * 1000.0 / max(density_kg_m3 * 9.80665, 1.0e-12)
+
+
+# ── Pump/System-curve Y-axis helpers ────────────────────────────────────────
+# Supports both pressure units (kPa, psi, bar) and TDH/head units (ft, m).
+_PSC_HEAD_UNITS: tuple[str, ...] = ("kPa", "psi", "bar", "ft", "m")
+_PSC_LENGTH_UNIT_SET: frozenset[str] = frozenset({"ft", "m"})
+
+
+def _psc_head_from_m(head_m: float, unit: str, density_kg_m3: float) -> float:
+    """Convert head (metres) to the selected Y-axis display unit."""
+    if unit in _PSC_LENGTH_UNIT_SET:
+        return m_to_length(head_m, unit)
+    return _pressure_delta_from_kpa(_head_m_to_delta_kpa(head_m, density_kg_m3), unit)
+
+
+def _psc_head_to_m(value: float, unit: str, density_kg_m3: float) -> float:
+    """Convert a Y-axis display value back to head in metres."""
+    if unit in _PSC_LENGTH_UNIT_SET:
+        return length_to_m(value, unit)
+    return _delta_kpa_to_head_m(_pressure_delta_to_kpa(value, unit), density_kg_m3)
+
+
+def _psc_yaxis_label(unit: str) -> str:
+    """Return 'TDH' for head units, 'Pressure' for pressure units."""
+    return "TDH" if unit in _PSC_LENGTH_UNIT_SET else "Pressure"
 
 
 
@@ -1994,44 +2184,83 @@ def render_hydraulics() -> None:
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         psc_col1, psc_col2 = st.columns(2)
         psc_flow_unit = psc_col1.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_psc_flow_unit")
-        psc_pressure_unit = psc_col2.selectbox("Pressure unit", ("kPa", "psi", "bar"), index=1, key="hyd_psc_pressure_unit")
+        psc_pressure_unit = psc_col2.selectbox("Y-axis unit (pressure or TDH)", _PSC_HEAD_UNITS, index=_PSC_HEAD_UNITS.index("psi"), key="hyd_psc_pressure_unit")
+        _psc_ylabel = _psc_yaxis_label(psc_pressure_unit)
 
         with curve_tabs[0]:
             p1, p2, p3 = st.columns(3)
-            _default_shutoff = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.6, 20.0), density_kg_m3), psc_pressure_unit)
+            _default_shutoff = _psc_head_from_m(max(result.total_dynamic_head_m * 1.6, 20.0), psc_pressure_unit, density_kg_m3)
             _default_max_flow = m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.5, 10.0), psc_flow_unit)
-            _default_head_at_max = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.5, 1.0), density_kg_m3), psc_pressure_unit)
-            _default_static_head = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), density_kg_m3), psc_pressure_unit)
-            shutoff_head = p1.number_input(f"Pump shutoff pressure rise ({psc_pressure_unit})", min_value=0.0, value=_default_shutoff, key="hyd_curve_shutoff")
-            max_flow_curve = p2.number_input(f"Pump max flow ({psc_flow_unit})", min_value=0.0, value=_default_max_flow, key="hyd_curve_max_flow")
-            head_at_max_flow = p3.number_input(f"Pump pressure at max flow ({psc_pressure_unit})", min_value=0.0, value=_default_head_at_max, key="hyd_curve_head_at_max")
-            static_curve_head = st.number_input(f"System static pressure rise ({psc_pressure_unit})", value=_default_static_head, key="hyd_curve_static_head")
-            shutoff_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(shutoff_head, psc_pressure_unit), density_kg_m3)
+            _default_head_at_max = _psc_head_from_m(max(result.total_dynamic_head_m * 0.5, 1.0), psc_pressure_unit, density_kg_m3)
+            _default_static_head = _psc_head_from_m(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_pressure_unit, density_kg_m3)
+            shutoff_head = p1.number_input(
+                f"Pump shutoff {_psc_ylabel} ({psc_pressure_unit})",
+                min_value=0.0, value=_default_shutoff, key="hyd_curve_shutoff",
+                help=(
+                    "The TDH or pressure the pump produces at zero (shut-off) flow. "
+                    "Also called dead-head. Typically 1.2–1.6× the design-point TDH. "
+                    "Used as the Y-intercept of the simplified pump curve."
+                ),
+            )
+            max_flow_curve = p2.number_input(
+                f"Pump max flow ({psc_flow_unit})",
+                min_value=0.0, value=_default_max_flow, key="hyd_curve_max_flow",
+                help=(
+                    "Maximum (end-of-curve / run-out) flow on the pump curve. "
+                    "Used as the X-axis end point for plotting and operating-point intersection."
+                ),
+            )
+            head_at_max_flow = p3.number_input(
+                f"Pump {_psc_ylabel} at max flow ({psc_pressure_unit})",
+                min_value=0.0, value=_default_head_at_max, key="hyd_curve_head_at_max",
+                help=(
+                    "TDH or pressure the pump produces at the maximum curve flow. "
+                    "This is typically the lowest point on the pump curve (run-out condition)."
+                ),
+            )
+            static_curve_head = st.number_input(
+                f"System static {_psc_ylabel} ({psc_pressure_unit})",
+                value=_default_static_head, key="hyd_curve_static_head",
+                help=(
+                    "Fixed (flow-independent) component of system TDH: "
+                    "elevation head plus any constant back-pressure. "
+                    "The system curve starts at this value at zero flow and rises with Q²."
+                ),
+            )
+            shutoff_head_m = _psc_head_to_m(shutoff_head, psc_pressure_unit, density_kg_m3)
             max_flow_curve_m3_h = volumetric_flow_to_m3_h(max_flow_curve, psc_flow_unit)
-            head_at_max_flow_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(head_at_max_flow, psc_pressure_unit), density_kg_m3)
-            static_curve_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(static_curve_head, psc_pressure_unit), density_kg_m3)
+            head_at_max_flow_m = _psc_head_to_m(head_at_max_flow, psc_pressure_unit, density_kg_m3)
+            static_curve_head_m = _psc_head_to_m(static_curve_head, psc_pressure_unit, density_kg_m3)
             k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
             curve_points = build_system_curve(static_curve_head_m, k_factor, max_flow_curve_m3_h)
             intersection = find_pump_system_intersection(shutoff_head_m, head_at_max_flow_m, max_flow_curve_m3_h, static_curve_head_m, k_factor)
             xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in curve_points]
-            system_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.total_dynamic_head_m, density_kg_m3), psc_pressure_unit) for point in curve_points]
-            pump_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(shutoff_head_m + (head_at_max_flow_m - shutoff_head_m) * (point.flow_m3_h / max(max_flow_curve_m3_h, 1e-9)), density_kg_m3), psc_pressure_unit) for point in curve_points]
+            system_heads = [_psc_head_from_m(point.total_dynamic_head_m, psc_pressure_unit, density_kg_m3) for point in curve_points]
+            pump_heads = [_psc_head_from_m(shutoff_head_m + (head_at_max_flow_m - shutoff_head_m) * (point.flow_m3_h / max(max_flow_curve_m3_h, 1e-9)), psc_pressure_unit, density_kg_m3) for point in curve_points]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
             fig.add_trace(go.Scatter(x=xs, y=pump_heads, mode="lines", name="Pump curve"))
             if intersection is not None:
-                fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit)], y=[_pressure_delta_from_kpa(_head_m_to_delta_kpa(intersection.total_dynamic_head_m, density_kg_m3), psc_pressure_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit)], y=[_psc_head_from_m(intersection.total_dynamic_head_m, psc_pressure_unit, density_kg_m3)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                 m1, m2 = st.columns(2)
                 m1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
-                m2.metric("Estimated operating pressure", f"{_pressure_delta_from_kpa(_head_m_to_delta_kpa(intersection.total_dynamic_head_m, density_kg_m3), psc_pressure_unit):,.2f} {psc_pressure_unit}")
-            fig.update_layout(title="Pump vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Pressure ({psc_pressure_unit})")
+                m2.metric(f"Estimated operating {_psc_ylabel.lower()}", f"{_psc_head_from_m(intersection.total_dynamic_head_m, psc_pressure_unit, density_kg_m3):,.2f} {psc_pressure_unit}")
+            fig.update_layout(title="Pump vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"{_psc_ylabel} ({psc_pressure_unit})")
             st.plotly_chart(fig, use_container_width=True)
 
         with curve_tabs[1]:
             st.caption("Use a built-in pump curve or upload vendor flow-head points from CSV/Excel, then compare that curve against the estimated system curve.")
-            _adv_default_static = _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), density_kg_m3), psc_pressure_unit)
-            static_curve_head = st.number_input(f"System static pressure rise ({psc_pressure_unit})", value=_adv_default_static, key="hyd_curve_static_head_adv")
-            static_curve_head_m = _delta_kpa_to_head_m(_pressure_delta_to_kpa(static_curve_head, psc_pressure_unit), density_kg_m3)
+            _adv_default_static = _psc_head_from_m(max(length_to_m(elevation_change, elevation_unit) if elevation_change > 0 else 0.0, 0.0), psc_pressure_unit, density_kg_m3)
+            static_curve_head = st.number_input(
+                f"System static {_psc_ylabel} ({psc_pressure_unit})",
+                value=_adv_default_static, key="hyd_curve_static_head_adv",
+                help=(
+                    "Fixed (flow-independent) component of system TDH: "
+                    "elevation head plus any constant back-pressure. "
+                    "The system curve starts at this value at zero flow and rises with Q²."
+                ),
+            )
+            static_curve_head_m = _psc_head_to_m(static_curve_head, psc_pressure_unit, density_kg_m3)
             k_factor = max((result.total_dynamic_head_m - static_curve_head_m) / max(current_flow_m3_h ** 2, 1e-9), 0.0)
             curve_source = st.radio("Pump curve source", ["Built-in library", "Upload CSV/Excel", "Manual table"], horizontal=True, key="hyd_curve_source")
 
@@ -2064,24 +2293,24 @@ def render_hydraulics() -> None:
                         uploaded_rows_si = [
                             {
                                 "flow_m3_h": volumetric_flow_to_m3_h(row.get(flow_col) or 0.0, psc_flow_unit),
-                                "head_m": _delta_kpa_to_head_m(_pressure_delta_to_kpa(row.get(head_col) or 0.0, psc_pressure_unit), density_kg_m3),
+                                "head_m": _psc_head_to_m(row.get(head_col) or 0.0, psc_pressure_unit, density_kg_m3),
                             }
                             for row in uploaded_df.to_dict(orient="records")
                         ]
                         selected_curve = build_pump_curve_from_xy_rows(curve_name, uploaded_rows_si, "flow_m3_h", "head_m", family=curve_family)
             else:
                 _mc_flow_col = f"flow ({psc_flow_unit})"
-                _mc_head_col = f"pressure ({psc_pressure_unit})"
+                _mc_head_col = f"{_psc_ylabel.lower()} ({psc_pressure_unit})"
                 manual_curve = pd.DataFrame([
-                    {_mc_flow_col: m3_h_to_volumetric_flow(0.0, psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.7, 25.0), density_kg_m3), psc_pressure_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 0.5, 10.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 1.2, 15.0), density_kg_m3), psc_pressure_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h, 20.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.95, 8.0), density_kg_m3), psc_pressure_unit)},
-                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.35, 30.0), psc_flow_unit), _mc_head_col: _pressure_delta_from_kpa(_head_m_to_delta_kpa(max(result.total_dynamic_head_m * 0.65, 3.0), density_kg_m3), psc_pressure_unit)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(0.0, psc_flow_unit), _mc_head_col: _psc_head_from_m(max(result.total_dynamic_head_m * 1.7, 25.0), psc_pressure_unit, density_kg_m3)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 0.5, 10.0), psc_flow_unit), _mc_head_col: _psc_head_from_m(max(result.total_dynamic_head_m * 1.2, 15.0), psc_pressure_unit, density_kg_m3)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h, 20.0), psc_flow_unit), _mc_head_col: _psc_head_from_m(max(result.total_dynamic_head_m * 0.95, 8.0), psc_pressure_unit, density_kg_m3)},
+                    {_mc_flow_col: m3_h_to_volumetric_flow(max(current_flow_m3_h * 1.35, 30.0), psc_flow_unit), _mc_head_col: _psc_head_from_m(max(result.total_dynamic_head_m * 0.65, 3.0), psc_pressure_unit, density_kg_m3)},
                 ])
                 edited_curve = st.data_editor(manual_curve, num_rows="dynamic", use_container_width=True, key="hyd_curve_manual_editor")
                 curve_name = st.text_input("Curve name", value="Manual pump curve", key="hyd_curve_manual_name")
                 curve_family = st.text_input("Curve family / pump tag", value="Manual entry", key="hyd_curve_manual_family")
-                _mc_si_rows = [{"flow_m3_h": volumetric_flow_to_m3_h(row.get(_mc_flow_col) or 0.0, psc_flow_unit), "head_m": _delta_kpa_to_head_m(_pressure_delta_to_kpa(row.get(_mc_head_col) or 0.0, psc_pressure_unit), density_kg_m3)} for row in edited_curve.to_dict(orient="records")]
+                _mc_si_rows = [{"flow_m3_h": volumetric_flow_to_m3_h(row.get(_mc_flow_col) or 0.0, psc_flow_unit), "head_m": _psc_head_to_m(row.get(_mc_head_col) or 0.0, psc_pressure_unit, density_kg_m3)} for row in edited_curve.to_dict(orient="records")]
                 selected_curve = build_pump_curve_from_xy_rows(curve_name, _mc_si_rows, "flow_m3_h", "head_m", family=curve_family)
 
             if selected_curve is not None:
@@ -2089,26 +2318,26 @@ def render_hydraulics() -> None:
                 system_curve_points = build_system_curve(static_curve_head_m, k_factor, max_curve_flow)
                 library_intersection = find_curve_system_intersection(selected_curve, static_curve_head_m, k_factor)
                 curve_df = pd.DataFrame([
-                    {f"Flow ({psc_flow_unit})": m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit), f"Pump pressure ({psc_pressure_unit})": _pressure_delta_from_kpa(_head_m_to_delta_kpa(point.head_m, density_kg_m3), psc_pressure_unit)}
+                    {f"Flow ({psc_flow_unit})": m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit), f"Pump {_psc_ylabel} ({psc_pressure_unit})": _psc_head_from_m(point.head_m, psc_pressure_unit, density_kg_m3)}
                     for point in selected_curve.points
                 ])
                 st.dataframe(curve_df, use_container_width=True)
                 xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in system_curve_points]
-                system_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.total_dynamic_head_m, density_kg_m3), psc_pressure_unit) for point in system_curve_points]
+                system_heads = [_psc_head_from_m(point.total_dynamic_head_m, psc_pressure_unit, density_kg_m3) for point in system_curve_points]
                 pump_xs = [m3_h_to_volumetric_flow(point.flow_m3_h, psc_flow_unit) for point in selected_curve.points]
-                pump_heads = [_pressure_delta_from_kpa(_head_m_to_delta_kpa(point.head_m, density_kg_m3), psc_pressure_unit) for point in selected_curve.points]
+                pump_heads = [_psc_head_from_m(point.head_m, psc_pressure_unit, density_kg_m3) for point in selected_curve.points]
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=xs, y=system_heads, mode="lines", name="System curve"))
                 fig.add_trace(go.Scatter(x=pump_xs, y=pump_heads, mode="lines+markers", name=selected_curve.name))
                 if library_intersection is not None:
-                    fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit)], y=[_pressure_delta_from_kpa(_head_m_to_delta_kpa(library_intersection.head_m, density_kg_m3), psc_pressure_unit)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
+                    fig.add_trace(go.Scatter(x=[m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit)], y=[_psc_head_from_m(library_intersection.head_m, psc_pressure_unit, density_kg_m3)], mode="markers", marker=dict(size=12), name="Estimated operating point"))
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Estimated operating flow", f"{m3_h_to_volumetric_flow(library_intersection.flow_m3_h, psc_flow_unit):,.1f} {psc_flow_unit}")
-                    c2.metric("Estimated operating pressure", f"{_pressure_delta_from_kpa(_head_m_to_delta_kpa(library_intersection.head_m, density_kg_m3), psc_pressure_unit):,.2f} {psc_pressure_unit}")
+                    c2.metric(f"Estimated operating {_psc_ylabel.lower()}", f"{_psc_head_from_m(library_intersection.head_m, psc_pressure_unit, density_kg_m3):,.2f} {psc_pressure_unit}")
                     c3.metric("% of curve max flow", f"{library_intersection.fraction_of_curve_max_flow * 100.0:,.1f}%")
                     if library_intersection.head_error_m > 1.0:
                         st.warning("Pump/system intersection error is still noticeable on the sampled points. Add more curve points for better accuracy.")
-                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"Pressure ({psc_pressure_unit})")
+                fig.update_layout(title=f"{selected_curve.name} vs System Curve", xaxis_title=f"Flow ({psc_flow_unit})", yaxis_title=f"{_psc_ylabel} ({psc_pressure_unit})")
                 st.plotly_chart(fig, use_container_width=True)
                 _show_notes(selected_curve.notes)
 
