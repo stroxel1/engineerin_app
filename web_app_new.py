@@ -97,6 +97,11 @@ from engineering_app.core.pump_curves import (
     screen_affinity_rerate,
     screen_instrument_bias,
 )
+from engineering_app.core.pump_sizing import (
+    PumpSizingInputs,
+    atmospheric_pressure_kpa_abs_from_elevation,
+    calculate_pump_sizing,
+)
 from engineering_app.core.quicktools import (
     brix_reconciliation,
     dilution_water,
@@ -4032,6 +4037,278 @@ def render_solubility_curve() -> None:
 
 
 
+def render_pump_sizing() -> None:
+    st.header("Pump Sizing Tool")
+    st.caption(
+        "Preliminary centrifugal pump sizing for clean/mildly contaminated industrial liquids. "
+        "This screen targets 5-1000 gpm and emphasizes TDH, NPSH margin, and operating-point sanity checks."
+    )
+
+    unit1, unit2, unit3, unit4, unit5 = st.columns(5)
+    flow_unit = unit1.selectbox(
+        "Flow unit",
+        VOLUMETRIC_FLOW_UNITS,
+        index=VOLUMETRIC_FLOW_UNITS.index("gpm") if "gpm" in VOLUMETRIC_FLOW_UNITS else 0,
+        key="psz_flow_unit",
+    )
+    head_unit = unit2.selectbox(
+        "Head unit",
+        LENGTH_UNITS,
+        index=LENGTH_UNITS.index("ft") if "ft" in LENGTH_UNITS else 0,
+        key="psz_head_unit",
+    )
+    length_unit = unit3.selectbox(
+        "Length unit",
+        LENGTH_UNITS,
+        index=LENGTH_UNITS.index("ft") if "ft" in LENGTH_UNITS else 0,
+        key="psz_length_unit",
+    )
+    pressure_unit = unit4.selectbox(
+        "Pressure unit",
+        PRESSURE_UNITS,
+        index=PRESSURE_UNITS.index("psia") if "psia" in PRESSURE_UNITS else 0,
+        key="psz_pressure_unit",
+    )
+    power_unit = unit5.selectbox(
+        "Power unit",
+        POWER_UNITS,
+        index=POWER_UNITS.index("hp") if "hp" in POWER_UNITS else 0,
+        key="psz_power_unit",
+    )
+
+    st.subheader("Required duty and fluid")
+    d1, d2, d3, d4 = st.columns(4)
+    required_flow = d1.number_input("Required flow", min_value=0.1, value=250.0, key="psz_flow")
+    suction_static_head = d2.number_input("Static suction head (+ flooded / - lift)", value=5.0, key="psz_suction_static")
+    discharge_static_head = d3.number_input("Static discharge head", min_value=0.0, value=80.0, key="psz_discharge_static")
+    minimum_npsh_ratio = d4.number_input("Minimum acceptable NPSH margin ratio", min_value=1.0, value=1.20, step=0.05, key="psz_npsh_ratio")
+
+    f1, f2, f3, f4, f5 = st.columns(5)
+    density_value = f1.number_input("Density", min_value=1.0, value=998.0, key="psz_density")
+    density_unit = f2.selectbox("Density unit", DENSITY_UNITS, index=0, key="psz_density_unit")
+    viscosity_value = f3.number_input("Viscosity", min_value=0.05, value=1.0, key="psz_viscosity")
+    viscosity_unit = f4.selectbox("Viscosity unit", VISCOSITY_UNITS, index=0, key="psz_viscosity_unit")
+    liquid_temperature = f5.number_input("Liquid temperature", value=25.0, key="psz_temp")
+    liquid_temperature_unit = st.selectbox("Liquid temperature unit", TEMPERATURE_UNITS, index=0, key="psz_temp_unit")
+
+    st.subheader("Suction and discharge piping")
+
+    s1, s2, s3, s4 = st.columns(4)
+    suction_basis = s1.selectbox("Suction diameter basis", ["schedule_10s_stainless", "custom_id"], format_func=lambda key: {"schedule_10s_stainless": "Schedule 10S stainless", "custom_id": "Custom ID"}[key], key="psz_suction_basis")
+    discharge_basis = s2.selectbox("Discharge diameter basis", ["schedule_10s_stainless", "custom_id"], format_func=lambda key: {"schedule_10s_stainless": "Schedule 10S stainless", "custom_id": "Custom ID"}[key], key="psz_discharge_basis")
+    suction_pipe_length = s3.number_input("Suction pipe length", min_value=0.0, value=25.0, key="psz_suction_len")
+    discharge_pipe_length = s4.number_input("Discharge pipe length", min_value=0.0, value=450.0, key="psz_discharge_len")
+
+    pipe_lookup = {spec.display_name: spec for spec in SCHEDULE_10S_STAINLESS}
+    suction_id_value = 0.0
+    discharge_id_value = 0.0
+    suction_id_unit = "mm"
+    discharge_id_unit = "mm"
+
+    if suction_basis == "schedule_10s_stainless":
+        suction_size = st.selectbox("Suction pipe size", [spec.display_name for spec in SCHEDULE_10S_STAINLESS], index=6, key="psz_suction_size")
+        suction_spec = pipe_lookup[suction_size]
+        suction_id_value = suction_spec.inside_diameter_in * 25.4
+        st.caption(f"Suction ID from schedule: {suction_id_value:.2f} mm")
+    else:
+        sd1, sd2 = st.columns(2)
+        suction_id_value = sd1.number_input("Suction pipe ID", min_value=0.01, value=3.0, key="psz_suction_id")
+        suction_id_unit = sd2.selectbox("Suction ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index("in") if "in" in LENGTH_UNITS else 0, key="psz_suction_id_unit")
+
+    if discharge_basis == "schedule_10s_stainless":
+        discharge_size = st.selectbox("Discharge pipe size", [spec.display_name for spec in SCHEDULE_10S_STAINLESS], index=5, key="psz_discharge_size")
+        discharge_spec = pipe_lookup[discharge_size]
+        discharge_id_value = discharge_spec.inside_diameter_in * 25.4
+        st.caption(f"Discharge ID from schedule: {discharge_id_value:.2f} mm")
+    else:
+        dd1, dd2 = st.columns(2)
+        discharge_id_value = dd1.number_input("Discharge pipe ID", min_value=0.01, value=2.5, key="psz_discharge_id")
+        discharge_id_unit = dd2.selectbox("Discharge ID unit", LENGTH_UNITS, index=LENGTH_UNITS.index("in") if "in" in LENGTH_UNITS else 0, key="psz_discharge_id_unit")
+
+    k_caption = "Counted fitting K uses defaults: 90 elbow=0.9, tee-through=0.6, valve open=0.2. Add user K for anything else."
+    st.caption(k_caption)
+    k1, k2, k3, k4 = st.columns(4)
+    suction_elbows = k1.number_input("Suction 90 elbows", min_value=0, value=4, step=1, key="psz_suction_elbows")
+    suction_tees = k2.number_input("Suction tees", min_value=0, value=0, step=1, key="psz_suction_tees")
+    suction_valves = k3.number_input("Suction valves", min_value=0, value=1, step=1, key="psz_suction_valves")
+    suction_user_k = k4.number_input("Suction additional user-entered K", min_value=0.0, value=1.0, key="psz_suction_user_k")
+
+    k5, k6, k7, k8 = st.columns(4)
+    discharge_elbows = k5.number_input("Discharge 90 elbows", min_value=0, value=12, step=1, key="psz_discharge_elbows")
+    discharge_tees = k6.number_input("Discharge tees", min_value=0, value=1, step=1, key="psz_discharge_tees")
+    discharge_valves = k7.number_input("Discharge valves", min_value=0, value=2, step=1, key="psz_discharge_valves")
+    discharge_user_k = k8.number_input("Discharge additional user-entered K", min_value=0.0, value=2.0, key="psz_discharge_user_k")
+
+    eq1, eq2, eq3, eq4 = st.columns(4)
+    suction_equiv_len = eq1.number_input("Suction equivalent length", min_value=0.0, value=5.0, key="psz_suction_equiv_len")
+    discharge_equiv_len = eq2.number_input("Discharge equivalent length", min_value=0.0, value=35.0, key="psz_discharge_equiv_len")
+    suction_roughness = eq3.number_input("Suction roughness (mm)", min_value=0.001, value=0.045, key="psz_suction_rough")
+    discharge_roughness = eq4.number_input("Discharge roughness (mm)", min_value=0.001, value=0.045, key="psz_discharge_rough")
+
+    st.subheader("NPSH and power settings")
+    p1, p2, p3, p4 = st.columns(4)
+    pressure_basis = p1.radio("Surface pressure basis", ["direct", "site_elevation"], horizontal=True, key="psz_pressure_basis")
+    surface_pressure_value = p2.number_input("Suction source surface pressure", min_value=0.01, value=14.7, key="psz_surface_pressure")
+    required_npshr_enabled = p3.checkbox("Enter required NPSHr", value=True, key="psz_npshr_enabled")
+    required_npshr = p4.number_input("Required NPSHr", min_value=0.1, value=12.0, key="psz_npshr", disabled=not required_npshr_enabled)
+
+    p5, p6, p7, p8 = st.columns(4)
+    vapor_override_enabled = p5.checkbox("Enter vapor pressure override", value=False, key="psz_vapor_override_enabled")
+    vapor_pressure_value = p6.number_input("Vapor pressure", min_value=0.01, value=3.2, key="psz_vapor_pressure", disabled=not vapor_override_enabled)
+    pump_efficiency = p7.number_input("Pump efficiency (fraction)", min_value=0.05, max_value=0.95, value=0.75, step=0.01, key="psz_pump_eff")
+    motor_efficiency = p8.number_input("Motor efficiency (fraction)", min_value=0.50, max_value=0.99, value=0.93, step=0.01, key="psz_motor_eff")
+    service_factor = st.number_input("Motor service factor", min_value=1.0, max_value=1.5, value=1.15, step=0.05, key="psz_motor_sf")
+
+    with st.expander("Advanced mode: source/discharge levels, pump curve, and affinity checks"):
+        adv1, adv2, adv3 = st.columns(3)
+        use_level_override = adv1.checkbox("Use source/discharge level override", value=False, key="psz_level_override")
+        source_level = adv2.number_input("Suction source liquid level", value=0.0, key="psz_source_level", disabled=not use_level_override)
+        discharge_level = adv3.number_input("Discharge tank level", value=0.0, key="psz_discharge_level", disabled=not use_level_override)
+
+        adv4, adv5 = st.columns(2)
+        enable_curve = adv4.checkbox("Enable simplified pump curve check", value=True, key="psz_enable_curve")
+        curve_max_flow = adv5.number_input("Curve max flow", min_value=0.0, value=400.0, key="psz_curve_max_flow", disabled=not enable_curve)
+        adv6, adv7 = st.columns(2)
+        curve_shutoff = adv6.number_input("Pump shutoff TDH", min_value=0.0, value=150.0, key="psz_curve_shutoff", disabled=not enable_curve)
+        curve_head_at_max = adv7.number_input("Pump TDH at max flow", min_value=0.0, value=70.0, key="psz_curve_head_at_max", disabled=not enable_curve)
+
+        adv8, adv9, adv10, adv11 = st.columns(4)
+        base_speed = adv8.number_input("Base speed (rpm)", min_value=0.0, value=1800.0, key="psz_base_speed")
+        new_speed = adv9.number_input("Rerated speed (rpm)", min_value=0.0, value=1800.0, key="psz_new_speed")
+        base_impeller = adv10.number_input("Base impeller diameter", min_value=0.0, value=10.0, key="psz_base_impeller")
+        new_impeller = adv11.number_input("Rerated impeller diameter", min_value=0.0, value=10.0, key="psz_new_impeller")
+        impeller_unit = st.selectbox("Impeller diameter unit", LENGTH_UNITS, index=LENGTH_UNITS.index("in") if "in" in LENGTH_UNITS else 0, key="psz_impeller_unit")
+
+    density_kg_m3 = density_to_kg_m3(density_value, density_unit)
+    viscosity_cp = viscosity_to_cp(viscosity_value, viscosity_unit)
+    liquid_temperature_c = temperature_to_c(liquid_temperature, liquid_temperature_unit)
+    flow_m3_h = volumetric_flow_to_m3_h(required_flow, flow_unit)
+    flow_gpm = m3_h_to_volumetric_flow(flow_m3_h, "gpm")
+
+    suction_k_total = (
+        0.9 * float(suction_elbows)
+        + 0.6 * float(suction_tees)
+        + 0.2 * float(suction_valves)
+        + suction_user_k
+    )
+    discharge_k_total = (
+        0.9 * float(discharge_elbows)
+        + 0.6 * float(discharge_tees)
+        + 0.2 * float(discharge_valves)
+        + discharge_user_k
+    )
+
+    surface_pressure_kpa_abs = pressure_to_kpa_abs(surface_pressure_value, pressure_unit)
+    if pressure_basis == "site_elevation":
+        site_elevation_m = length_to_m(surface_pressure_value, length_unit)
+        surface_pressure_kpa_abs = atmospheric_pressure_kpa_abs_from_elevation(site_elevation_m)
+        st.caption(f"Site-elevation derived atmospheric pressure: {surface_pressure_kpa_abs:.2f} kPa(a)")
+
+    if use_level_override:
+        suction_static_head = source_level
+        discharge_static_head = discharge_level
+
+    try:
+        result = calculate_pump_sizing(
+            PumpSizingInputs(
+                flow_m3_h=flow_m3_h,
+                flow_gpm=flow_gpm,
+                density_kg_m3=density_kg_m3,
+                viscosity_cp=viscosity_cp,
+                liquid_temperature_c=liquid_temperature_c,
+                suction_static_head_m=length_to_m(suction_static_head, head_unit),
+                discharge_static_head_m=length_to_m(discharge_static_head, head_unit),
+                suction_pipe_length_m=length_to_m(suction_pipe_length + suction_equiv_len, length_unit),
+                discharge_pipe_length_m=length_to_m(discharge_pipe_length + discharge_equiv_len, length_unit),
+                suction_pipe_id_mm=length_to_m(suction_id_value, suction_id_unit) * 1000.0,
+                discharge_pipe_id_mm=length_to_m(discharge_id_value, discharge_id_unit) * 1000.0,
+                suction_roughness_mm=suction_roughness,
+                discharge_roughness_mm=discharge_roughness,
+                suction_k_total=suction_k_total,
+                discharge_k_total=discharge_k_total,
+                surface_pressure_kpa_abs=surface_pressure_kpa_abs,
+                minimum_npsh_margin_ratio=minimum_npsh_ratio,
+                pump_efficiency_fraction=pump_efficiency,
+                motor_efficiency_fraction=motor_efficiency,
+                motor_service_factor=service_factor,
+                required_npshr_m=length_to_m(required_npshr, head_unit) if required_npshr_enabled else None,
+                vapor_pressure_kpa_abs=pressure_to_kpa_abs(vapor_pressure_value, pressure_unit) if vapor_override_enabled else None,
+                curve_shutoff_head_m=length_to_m(curve_shutoff, head_unit) if enable_curve else None,
+                curve_max_flow_m3_h=volumetric_flow_to_m3_h(curve_max_flow, flow_unit) if enable_curve else None,
+                curve_head_at_max_flow_m=length_to_m(curve_head_at_max, head_unit) if enable_curve else None,
+                base_speed_rpm=base_speed if base_speed > 0.0 else None,
+                new_speed_rpm=new_speed if new_speed > 0.0 else None,
+                base_impeller_diameter_m=length_to_m(base_impeller, impeller_unit) if base_impeller > 0.0 else None,
+                new_impeller_diameter_m=length_to_m(new_impeller, impeller_unit) if new_impeller > 0.0 else None,
+            )
+        )
+
+        st.subheader("Recommended pump duty point")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Required flow", f"{m3_h_to_volumetric_flow(result.required_flow_m3_h, flow_unit):,.1f} {flow_unit}")
+        r2.metric("Required TDH", f"{m_to_length(result.required_tdh_m, head_unit):,.2f} {head_unit}")
+        r3.metric("NPSHa", f"{m_to_length(result.npsha_m, head_unit):,.2f} {head_unit}")
+        r4.metric("NPSH margin", f"{m_to_length(result.npsh_margin_m, head_unit):,.2f} {head_unit}", delta=f"{result.npsh_margin_ratio:,.2f}x")
+
+        pwr1, pwr2, pwr3, pwr4 = st.columns(4)
+        pwr1.metric("Hydraulic power", f"{kw_to_power(result.hydraulic_power_kw, power_unit):,.2f} {power_unit}")
+        pwr2.metric("Brake power", f"{kw_to_power(result.brake_power_kw, power_unit):,.2f} {power_unit}")
+        pwr3.metric("Brake horsepower", f"{result.brake_horsepower_hp:,.2f} hp")
+        pwr4.metric("Recommended motor", f"{kw_to_power(result.recommended_motor_kw, power_unit):,.2f} {power_unit}")
+
+        dty1, dty2, dty3, dty4 = st.columns(4)
+        dty1.metric("Static head total", f"{m_to_length(result.static_head_total_m, head_unit):,.2f} {head_unit}")
+        dty2.metric("Suction line loss", f"{m_to_length(result.suction_line_loss_m, head_unit):,.2f} {head_unit}")
+        dty3.metric("Discharge line loss", f"{m_to_length(result.discharge_line_loss_m, head_unit):,.2f} {head_unit}")
+        dty4.metric("NPSHr used", f"{m_to_length(result.npshr_m, head_unit):,.2f} {head_unit}")
+
+        vel1, vel2, vel3 = st.columns(3)
+        vel1.metric("Suction velocity", f"{result.suction_velocity_m_s:,.2f} m/s")
+        vel2.metric("Discharge velocity", f"{result.discharge_velocity_m_s:,.2f} m/s")
+        if result.duty_flow_fraction_of_bep is not None:
+            vel3.metric("Duty as % of estimated BEP flow", f"{result.duty_flow_fraction_of_bep * 100.0:,.1f}%")
+        else:
+            vel3.metric("Duty as % of estimated BEP flow", "Curve not enabled")
+
+        if result.curve_head_at_duty_m is not None and result.curve_head_margin_m is not None:
+            c1, c2 = st.columns(2)
+            c1.metric("Curve head at duty flow", f"{m_to_length(result.curve_head_at_duty_m, head_unit):,.2f} {head_unit}")
+            c2.metric("Curve head margin", f"{m_to_length(result.curve_head_margin_m, head_unit):,.2f} {head_unit}")
+
+        if result.warnings:
+            st.subheader("Warnings")
+            for warning in result.warnings:
+                st.warning(warning)
+        else:
+            st.success("No major sizing warnings were triggered for the entered screening inputs.")
+
+        st.subheader("Assumptions and method notes")
+        _show_notes(result.assumptions)
+
+        export_rows = [
+            {"Item": "Required flow", "Value": m3_h_to_volumetric_flow(result.required_flow_m3_h, flow_unit), "Unit": flow_unit},
+            {"Item": "Required TDH", "Value": m_to_length(result.required_tdh_m, head_unit), "Unit": head_unit},
+            {"Item": "NPSHa", "Value": m_to_length(result.npsha_m, head_unit), "Unit": head_unit},
+            {"Item": "NPSHr", "Value": m_to_length(result.npshr_m, head_unit), "Unit": head_unit},
+            {"Item": "NPSH margin ratio", "Value": result.npsh_margin_ratio, "Unit": "x"},
+            {"Item": "Hydraulic power", "Value": kw_to_power(result.hydraulic_power_kw, power_unit), "Unit": power_unit},
+            {"Item": "Brake power", "Value": kw_to_power(result.brake_power_kw, power_unit), "Unit": power_unit},
+            {"Item": "Recommended motor", "Value": kw_to_power(result.recommended_motor_kw, power_unit), "Unit": power_unit},
+        ]
+        export_df = pd.DataFrame(export_rows)
+        st.download_button(
+            label="Download sizing summary (CSV)",
+            data=export_df.to_csv(index=False),
+            file_name="pump_sizing_summary.csv",
+            mime="text/csv",
+            key="psz_download_csv",
+        )
+        st.caption("PDF export is not enabled in this build. CSV export includes the key sizing outputs.")
+
+    except ValueError as exc:
+        st.error(f"Input validation error: {exc}")
+
+
 def render_heat_exchangers() -> None:
     st.header("Heat Exchangers")
     st.caption("LMTD screening, F-factor correction, and UA-based area sizing for shell-and-tube heat exchangers.  Use these results for quick plant checks — not for TEMA or mechanical design.")
@@ -4504,6 +4781,7 @@ def render_steam_cost_comparison() -> None:
 PAGES = {
     "Solution BPE": render_solution_bpe,
     "Quick Tools": render_quick_tools,
+    "Pump Sizing Tool": render_pump_sizing,
     "Hydraulics": render_hydraulics,
     "Heat Exchangers": render_heat_exchangers,
     "Steam Jets": render_steam_jets,
