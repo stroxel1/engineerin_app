@@ -2180,12 +2180,12 @@ def render_hydraulics() -> None:
 
     with tabs[7]:
         st.caption("Overlay a simple pump curve or a library/uploaded pump curve against the estimated system curve to visualize the operating point.")
-        curve_tabs = st.tabs(["Simple line", "Library / upload"])
         current_flow_m3_h = volumetric_flow_to_m3_h(flow_value, flow_unit)
         psc_col1, psc_col2 = st.columns(2)
         psc_flow_unit = psc_col1.selectbox("Flow unit", VOLUMETRIC_FLOW_UNITS, index=VOLUMETRIC_FLOW_UNITS.index(flow_unit) if flow_unit in VOLUMETRIC_FLOW_UNITS else 0, key="hyd_psc_flow_unit")
         psc_pressure_unit = psc_col2.selectbox("Y-axis unit (pressure or TDH)", _PSC_HEAD_UNITS, index=_PSC_HEAD_UNITS.index("psi"), key="hyd_psc_pressure_unit")
         _psc_ylabel = _psc_yaxis_label(psc_pressure_unit)
+        curve_tabs = st.tabs(["Simple line", "Library / upload"])
 
         with curve_tabs[0]:
             p1, p2, p3 = st.columns(3)
